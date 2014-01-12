@@ -4,28 +4,43 @@ import java.nio.ByteBuffer
 
 trait FrameBuilder[T] {
   val frameSize: Short
-  def build(obj: T, buffer: ByteBuffer): Unit
+  def apply(obj: T, buffer: TypedBuffer[T]): Unit
 }
 
 trait FrameReader[T] {
-  def unframe(): T
+  def apply(buffer: TypedBuffer[T]): T
 }
 
 trait Frame[T] {
   self: T =>
 
-  def frame(buffer: ByteBuffer)(implicit builder: FrameBuilder[T]) {
-    builder.build(self, buffer)
+  def frame(buffer: TypedBuffer[T]) {
+    buffer.write(this)
   }
 
-  def frame(implicit builder: FrameBuilder[T]): ByteBuffer = {
-    val result = ByteBuffer.allocate(builder.frameSize)
-    builder.build(self, result)
+  def frame(implicit reader: FrameReader[T], builder: FrameBuilder[T]):
+      TypedBuffer[T] = {
+    val result = new TypedBuffer(ByteBuffer.allocate(builder.frameSize))
+    result.write(this)
     result
   }
 }
 
-trait TypedBuffer[T] extends ByteBuffer {
-  def read: T
-  def write(obj: T): Unit
+class TypedBuffer[T](val byteBuffer: ByteBuffer)
+  (implicit reader: FrameReader[T], builder: FrameBuilder[T]) {
+  def read: T = {
+    byteBuffer.position(0)
+    reader(this)
+  }
+  def write(obj: T) {
+    byteBuffer.position(0)
+    builder(obj, this)
+  }
+  def slice[S](implicit sRead: FrameReader[S], sBuild: FrameBuilder[S]):
+      TypedBuffer[S] = {
+    val sBuffer = byteBuffer.slice
+    sBuffer.limit(sBuild.frameSize)
+    byteBuffer.position(byteBuffer.position + sBuild.frameSize)
+    new TypedBuffer(sBuffer)
+  }
 }

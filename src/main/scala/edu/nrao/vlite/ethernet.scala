@@ -54,8 +54,8 @@ object MAC {
   implicit object MACBuilder extends FrameBuilder[MAC] {
     val frameSize: Short = 6
 
-    def build(mac: MAC, buffer: ByteBuffer) {
-      buffer.put(mac.octet0).
+    def apply(mac: MAC, buffer: TypedBuffer[MAC]) {
+      buffer.byteBuffer.put(mac.octet0).
         put(mac.octet1).
         put(mac.octet2).
         put(mac.octet3).
@@ -64,14 +64,15 @@ object MAC {
     }
   }
 
-  implicit class MACReader(buffer: ByteBuffer) extends FrameReader[MAC] {
-    def unframe() = {
-      val octet0 = buffer.get
-      val octet1 = buffer.get
-      val octet2 = buffer.get
-      val octet3 = buffer.get
-      val octet4 = buffer.get
-      val octet5 = buffer.get
+  implicit object MACReader extends FrameReader[MAC] {
+    def apply(buffer: TypedBuffer[MAC]) = {
+      val b = buffer.byteBuffer
+      val octet0 = b.get
+      val octet1 = b.get
+      val octet2 = b.get
+      val octet3 = b.get
+      val octet4 = b.get
+      val octet5 = b.get
       MAC(octet0, octet1, octet2, octet3, octet4, octet5)
     }
   }
@@ -105,43 +106,42 @@ object Ethernet {
   def unapply[T <: Frame[T]](eth: Ethernet[T]) =
     Some((eth.destination, eth.source, eth.payload))
 
-  class Builder[T <: Frame[T]](implicit val tBuilder: FrameBuilder[T])
+  class Builder[T <: Frame[T]](
+    implicit val tReader: FrameReader[T],
+    val tBuilder: FrameBuilder[T])
       extends FrameBuilder[Ethernet[T]] {
     private val overhead: Short = 38
 
-    def macBuilder = implicitly[FrameBuilder[MAC]]
-
     val frameSize: Short = (overhead + tBuilder.frameSize).toShort
 
-    def build(eth: Ethernet[T], buffer: ByteBuffer) {
-      buffer.putLong(0x55555555555555D5L)
-      eth.destination.frame(buffer)
-      eth.source.frame(buffer)
-      buffer.putShort(tBuilder.frameSize)
-      eth.payload.frame(buffer)
-      buffer.putInt(0)
-      buffer.putLong(0)
-      buffer.putInt(0)
+    def apply(eth: Ethernet[T], buffer: TypedBuffer[Ethernet[T]]) {
+      val b = buffer.byteBuffer
+      b.putLong(0x55555555555555D5L)
+      buffer.slice[MAC].write(eth.destination)
+      buffer.slice[MAC].write(eth.source)
+      b.putShort(tBuilder.frameSize)
+      buffer.slice[T].write(eth.payload)
+      b.putInt(0)
+      b.putLong(0)
+      b.putInt(0)
     }
   }
 
-  class Reader[T <: Frame[T]](buffer: ByteBuffer)
-    (implicit val tReaderFn: (ByteBuffer) => FrameReader[T])
+  class Reader[T <: Frame[T]](
+    implicit val tReader: FrameReader[T],
+    val tBuilder: FrameBuilder[T])
       extends FrameReader[Ethernet[T]] {
 
-    lazy val macReader: FrameReader[MAC] = buffer
-
-    lazy val tReader = tReaderFn(buffer)
-
-    def unframe() = {
-      val preambleAndSFD = buffer.getLong()
-      val destination = macReader.unframe()
-      val source = macReader.unframe()
-      val frameSize = buffer.getShort()
-      val payload = tReader.unframe()
-      val crc = buffer.getInt()
-      val gap0 = buffer.getLong()
-      val gap1 = buffer.getInt()
+    def apply(buffer: TypedBuffer[Ethernet[T]]) = {
+      val b = buffer.byteBuffer
+      val preambleAndSFD = b.getLong()
+      val destination = buffer.slice[MAC].read
+      val source = buffer.slice[MAC].read
+      val frameSize = b.getShort()
+      val payload = buffer.slice[T].read
+      val crc = b.getInt()
+      val gap0 = b.getLong()
+      val gap1 = b.getInt()
       Ethernet(destination, source, payload)
     }
   }

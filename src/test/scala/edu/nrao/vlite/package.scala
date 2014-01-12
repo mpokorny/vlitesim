@@ -34,27 +34,27 @@ class EthernetFrameSpec extends FlatSpec with Matchers {
     implicit object PayloadBuilder extends FrameBuilder[TestPayload] {
       val frameSize: Short = 10
 
-      def build(testPayload: TestPayload, buffer: ByteBuffer) {
-        buffer.putInt(testPayload.int)
-        buffer.putFloat(testPayload.float)
-        buffer.putShort(testPayload.short)
+      def apply(testPayload: TestPayload, buffer: TypedBuffer[TestPayload]) {
+        val b = buffer.byteBuffer
+        b.putInt(testPayload.int)
+        b.putFloat(testPayload.float)
+        b.putShort(testPayload.short)
       }
     }
 
-    implicit class PayloadReader(buffer: ByteBuffer)
-        extends FrameReader[TestPayload] {
-      def unframe() = {
-        val int = buffer.getInt()
-        val float = buffer.getFloat()
-        val short = buffer.getShort()
+    implicit object PayloadReader extends FrameReader[TestPayload] {
+      def apply(buffer: TypedBuffer[TestPayload]) = {
+        val b = buffer.byteBuffer
+        val int = b.getInt()
+        val float = b.getFloat()
+        val short = b.getShort()
         TestPayload(int, float, short)
       }
     }
 
     implicit object EthernetBuilder extends Ethernet.Builder[TestPayload]
 
-    implicit class EthernetReader(buffer: ByteBuffer)
-        extends Ethernet.Reader[TestPayload](buffer)
+    implicit object EthernetReader extends Ethernet.Reader[TestPayload]
   }
 
   "An Ethernet frame" should
@@ -63,9 +63,7 @@ class EthernetFrameSpec extends FlatSpec with Matchers {
       val src = MAC(0,1,2,3,4,5)
       val dst = MAC(10,11,12,13,14,15)
       val eth = Ethernet(source=src, destination=dst, payload=t)
-      val ethFrame = eth.frame
-      ethFrame.position(0)
-      eth should === ((new TestPayload.EthernetReader(ethFrame)).unframe)
+      eth should === (eth.frame.read)
   }
 
 }
