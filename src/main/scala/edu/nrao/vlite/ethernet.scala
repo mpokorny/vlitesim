@@ -1,7 +1,6 @@
 package edu.nrao.vlite
 
 import java.nio.ByteBuffer
-//import java.util.zip.CRC32
 
 final class MAC(
   val octet0: Byte,
@@ -127,19 +126,23 @@ object Ethernet {
     implicit val tReader: FrameReader[T],
     val tBuilder: FrameBuilder[T])
       extends FrameBuilder[Ethernet[T]] {
-    private val overhead: Short = 38
+    private val overhead: Short = 18
 
-    val frameSize: Short = (overhead + tBuilder.frameSize).toShort
+    private val minPayload: Short = 46
+
+    private val payloadSize = tBuilder.frameSize max minPayload
+
+    private val padding = (payloadSize - tBuilder.frameSize).toShort
+
+    val frameSize: Short = (overhead + payloadSize).toShort
 
     def apply(eth: Ethernet[T], buffer: TypedBuffer[Ethernet[T]]) {
       val b = buffer.byteBuffer
-      b.putLong(0x55555555555555D5L)
       buffer.slice[MAC].write(eth.destination)
       buffer.slice[MAC].write(eth.source)
-      b.putShort(tBuilder.frameSize)
+      b.putShort(payloadSize)
       buffer.slice[T].write(eth.payload)
-      b.putInt(0)
-      b.putLong(0)
+      if (padding > 0) b.position(b.position + padding)
       b.putInt(0)
     }
   }
@@ -149,16 +152,20 @@ object Ethernet {
     val tBuilder: FrameBuilder[T])
       extends FrameReader[Ethernet[T]] {
 
+    private val minPayload: Short = 46
+
+    private val payloadSize = tBuilder.frameSize max minPayload
+
+    private val padding = (payloadSize - tBuilder.frameSize).toShort
+
     def apply(buffer: TypedBuffer[Ethernet[T]]) = {
       val b = buffer.byteBuffer
-      val preambleAndSFD = b.getLong()
       val destination = buffer.slice[MAC].read
       val source = buffer.slice[MAC].read
-      val frameSize = b.getShort()
+      val paddedFrameSize = b.getShort()
       val payload = buffer.slice[T].read
+      if (padding > 0) b.position(b.position + padding)
       val crc = b.getInt()
-      val gap0 = b.getLong()
-      val gap1 = b.getInt()
       Ethernet(destination, source, payload)
     }
   }
