@@ -48,8 +48,22 @@ object MAC {
     octet2: Byte,
     octet3: Byte,
     octet4: Byte,
-    octet5: Byte) =
+    octet5: Byte): MAC =
     new MAC(octet0, octet1, octet2, octet3, octet4, octet5)
+
+  def apply(macStr: String): MAC = {
+    val octetsStr = macStr.split(':')
+    require(
+      octetsStr.length == 6,
+      "Wrong number of octets in MAC address string: require 6")
+    val octets = octetsStr map { o =>
+      val s = java.lang.Short.parseShort(o, 16)
+      if (0 <= s && s < 0xFF) s.toByte
+      else throw new java.lang.NumberFormatException(
+        s"Value out of range. Value:$o Radix: 16")
+    }
+    new MAC(octets(0), octets(1), octets(2), octets(3), octets(4), octets(5))
+  }
 
   def unapply(mac: MAC) = Some(
     (mac.octet0, mac.octet1, mac.octet2, mac.octet3, mac.octet4, mac.octet5))
