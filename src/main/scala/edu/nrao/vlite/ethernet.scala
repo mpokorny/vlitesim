@@ -35,7 +35,10 @@ final class MAC(
       ) + octet4
     ) + octet5
 
-  override def toString = s"MAC($octet0,$octet1,$octet2,$octet3,$octet4,$octet5)"
+  override def toString =
+    List(octet0, octet1, octet2, octet3, octet4, octet5) map { o =>
+      f"$o%02x"
+    } mkString(":")
 }
 
 object MAC {
