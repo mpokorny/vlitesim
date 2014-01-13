@@ -20,7 +20,7 @@ trait Frame[T] {
 
   def frame(implicit reader: FrameReader[T], builder: FrameBuilder[T]):
       TypedBuffer[T] = {
-    val result = new TypedBuffer(ByteBuffer.allocate(builder.frameSize))
+    val result = new TypedBuffer(ByteBuffer.allocateDirect(builder.frameSize))
     result.write(this)
     result
   }
