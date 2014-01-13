@@ -3,13 +3,13 @@ package edu.nrao.vlite
 import java.nio.ByteBuffer
 import org.scalatest._
 
-class EthernetFrameSpec extends FlatSpec with Matchers {
+class FrameSpec extends FlatSpec with Matchers {
 
   final class TestPayload(val int: Int, val float: Float, val short: Short)
       extends Frame[TestPayload] {
     override def equals(other: Any) = other match {
-      case that: TestPayload =>
-        that.int == int && that.float == float && that.short == short
+      case TestPayload(tInt, tFloat, tShort) =>
+        tInt == int && tFloat == float && tShort == short
       case _ =>
         false
     }
