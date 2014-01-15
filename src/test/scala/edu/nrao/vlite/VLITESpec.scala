@@ -5,7 +5,7 @@ import org.scalatest._
 
 class VLITESpec extends FlatSpec with Matchers {
 
-  "An VLITE frame" should
+  "A VLITE frame" should
     "encode to Ethernet and decode again" in {
       val v = VLITEFrame(VLITEHeader(
         isInvalidData = false,
