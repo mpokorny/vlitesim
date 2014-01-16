@@ -59,7 +59,7 @@ class TransporterSpec(_system: ActorSystem)
   it should "transport frame to destination after start" in {
     val transporter = system.actorOf(
       Props(classOf[TransporterSpec.TestTransporter], testActor))
-    transporter ! StartTransport
+    transporter ! Start
     val frame = testEthernet0.frame
     transporter ! Transport(frame)
     expectMsg(TransporterSpec.Packet(frame))
@@ -69,13 +69,13 @@ class TransporterSpec(_system: ActorSystem)
     val transporter = system.actorOf(
       Props(classOf[TransporterSpec.TestTransporter], testActor))
     val frame0 = testEthernet0.frame
-    transporter ! StartTransport
+    transporter ! Start
     transporter ! Transport(frame0)
     expectMsg(TransporterSpec.Packet(frame0))
-    transporter ! StopTransport
+    transporter ! Stop
     transporter ! Transport(frame0)
     expectNoMsg
-    transporter ! StartTransport
+    transporter ! Start
     transporter ! Transport(frame0)
     expectMsg(TransporterSpec.Packet(frame0))
   }
@@ -85,12 +85,12 @@ class TransporterSpec(_system: ActorSystem)
       Props(classOf[TransporterSpec.TestTransporter], testActor))
     val numF = 4
     val frame0 = testEthernet0.frame
-    transporter ! StartTransport
+    transporter ! Start
     for (i <- 0 until numF) { transporter ! Transport(frame0) }
     receiveN(numF)
-    transporter ! StopTransport
+    transporter ! Stop
     for (i <- 0 until numF) { transporter ! Transport(frame0) }
-    transporter ! StartTransport
+    transporter ! Start
     for (i <- 0 until numF) { transporter ! Transport(frame0) }
     receiveN(numF)
     transporter ! GetBufferCount
@@ -101,13 +101,13 @@ class TransporterSpec(_system: ActorSystem)
     val transporter = system.actorOf(
       Props(classOf[TransporterSpec.TestTransporter], testActor))
     val frame0 = testEthernet0.frame
-    transporter ! StartTransport
+    transporter ! Start
     transporter ! Transport(frame0)
     expectMsg(TransporterSpec.Packet(frame0))
-    transporter ! StopTransport
+    transporter ! Stop
     transporter ! Transport(frame0)
     val frame1 = testEthernet1.frame
-    transporter ! StartTransport
+    transporter ! Start
     transporter ! Transport(frame1)
     expectMsg(TransporterSpec.Packet(frame1))
   }
