@@ -22,13 +22,13 @@ trait Transporter extends Actor {
       sendBuffer(buffer)
       if (bufferCount < Long.MaxValue) bufferCount += 1
       else bufferCount = 0
-    case StopTransport =>
+    case Stop =>
       context.become(idle)
     case _ =>
   }
 
   def idle: Receive = getBufferCount orElse {
-    case StartTransport =>
+    case Start =>
       context.become(transporting)
     case _ =>
   }
@@ -41,7 +41,8 @@ trait Transporter extends Actor {
   protected def sendBuffer(buffer: TypedBuffer[_]): Unit
 }
 
-final class EthernetTransporter(val device: String) extends Transporter {
+final class EthernetTransporter(val device: String, val dst: MAC)
+    extends Transporter {
   import edu.nrao.vlite.pcap._
   import Transporter._
   import EthernetTransporter._
@@ -49,7 +50,7 @@ final class EthernetTransporter(val device: String) extends Transporter {
 
   protected var pcap: Pcap = null
 
-  protected var sourceMAC: MAC = null
+  protected var src: MAC = null
 
   override def preStart() {
     val errbuff = new java.lang.StringBuilder("")
@@ -61,18 +62,21 @@ final class EthernetTransporter(val device: String) extends Transporter {
     } else if (errbuff.length > 0) {
       context.parent ! OpenWarning(errbuff.toString)
     }
-    sourceMAC = getMAC(device).get
+    val mtu = new java.io.BufferedReader(
+      new java.io.FileReader(s"/sys/class/net/$device/mtu")).readLine.toInt
+    if (mtu < 9000)
+      context.parent ! OpenWarning("'$device' MTU is small ($mtu)")
+    src = getMAC(device).get
   }
 
+  protected lazy val macs = List(
+    dst.octet0, dst.octet1, dst.octet2, dst.octet3, dst.octet4, dst.octet5,
+    src.octet0, src.octet1, src.octet2, src.octet3, src.octet4, src.octet5).
+    toArray
+  
   protected def sendBuffer(buffer: TypedBuffer[_]) {
-    buffer.byteBuffer.position(6)
-    buffer.byteBuffer.
-      put(sourceMAC.octet0).
-      put(sourceMAC.octet1).
-      put(sourceMAC.octet2).
-      put(sourceMAC.octet3).
-      put(sourceMAC.octet4).
-      put(sourceMAC.octet5)
+    buffer.byteBuffer.rewind
+    buffer.byteBuffer.put(macs)
     pcap.inject(buffer)
   }
 
