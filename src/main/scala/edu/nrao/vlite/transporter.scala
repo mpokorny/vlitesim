@@ -3,9 +3,9 @@ package edu.nrao.vlite
 import akka.actor.Actor
 
 object Transporter {
-  case object StartTransport
-  case object StopTransport
-  case class Transport(buffer: TypedBuffer[_])
+  case object Start
+  case object Stop
+  case class Transport[T <: Frame[T]](buffer: TypedBuffer[Ethernet[T]])
   case object GetBufferCount
   case class BufferCount(count: Long)
 }
