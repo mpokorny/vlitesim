@@ -11,16 +11,16 @@ final class VLITEHeader(
   val stationID: Int,
   val lengthBy8: Int = 0
 ) extends Frame[VLITEHeader] {
-  def isLegacyMode: Boolean = false
-  def version: Int = 0 // TODO: check this value
-  def isComplexData: Boolean = false
-  def log2NumChannels: Int = 0
-  def bitsPerSampleLess1: Int = 7
-  def extendedDataVersion: Int = 0
-  def extendedUserData0: Int = 0
-  def extendedUserData1: Int = 0
-  def extendedUserData2: Int = 0
-  def extendedUserData3: Int = 0
+  def isLegacyMode = VLITEHeader.isLegacyMode
+  def version = VLITEHeader.version
+  def isComplexData = VLITEHeader.isComplexData
+  def log2NumChannels = VLITEHeader.log2NumChannels
+  def bitsPerSampleLess1 = VLITEHeader.bitsPerSampleLess1
+  def extendedDataVersion = VLITEHeader.extendedDataVersion
+  def extendedUserData0 = VLITEHeader.extendedUserData0
+  def extendedUserData1 = VLITEHeader.extendedUserData1
+  def extendedUserData2 = VLITEHeader.extendedUserData2
+  def extendedUserData3 = VLITEHeader.extendedUserData3
 
   override def equals(other: Any) = other match {
     case that: VLITEHeader =>
@@ -81,6 +81,17 @@ object VLITEHeader {
       vltHdr.stationID,
       vltHdr.lengthBy8))
   }
+
+  val isLegacyMode: Boolean = false
+  val version: Int = 0 // TODO: check this value
+  val isComplexData: Boolean = false
+  val log2NumChannels: Int = 0
+  val bitsPerSampleLess1: Int = 7
+  val extendedDataVersion: Int = 0
+  val extendedUserData0: Int = 0
+  val extendedUserData1: Int = 0
+  val extendedUserData2: Int = 0
+  val extendedUserData3: Int = 0
 
   implicit object Builder extends FrameBuilder[VLITEHeader] {
     val frameSize: Short = 32
@@ -191,7 +202,7 @@ object VLITEFrame {
 
   def unapply(frame: VLITEFrame) = Some((frame.header))
 
-  private val dataArraySize = 1000 // FIXME: should be 5000
+  val dataArraySize = 5000
 
   implicit object Builder extends FrameBuilder[VLITEFrame] {
 
