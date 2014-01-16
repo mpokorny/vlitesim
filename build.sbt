@@ -9,7 +9,9 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-testkit" % "2.2.1",
   "org.scalatest" %% "scalatest" % "2.0" % "test",
   "junit" % "junit" % "4.11" % "test",
-  "com.novocode" % "junit-interface" % "0.10" % "test"
+  "com.novocode" % "junit-interface" % "0.10" % "test",
+  "joda-time" % "joda-time" % "2.3",
+  "org.joda" % "joda-convert" % "1.5"
 )
 
 testOptions += Tests.Argument(TestFrameworks.JUnit, "-v")
