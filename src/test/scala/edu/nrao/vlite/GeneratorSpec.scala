@@ -33,7 +33,7 @@ class GeneratorSpec(_system: ActorSystem)
       threadID,
       stationID,
       transporter.get,
-      Generator.framesPerSec / rate))
+      decimation = Generator.framesPerSec / rate))
   }
 
   "A Generator" should "start in the idle state" in {
@@ -77,11 +77,11 @@ class GeneratorSpec(_system: ActorSystem)
     import system._
     val generator = testGenerator(0, 0, 100)
     generator ! Generator.Start
-    scheduler.scheduleOnce(1.seconds, generator, Generator.Stop)
-    val frames = receiveWhile(1200.millis) {
+    scheduler.scheduleOnce(5.seconds, generator, Generator.Stop)
+    val frames = receiveWhile(6.seconds) {
       case _: GeneratorSpec.Packet => true
     }
-    frames.length should === (100 +- 1)
+    frames.length should === (500 +- 1)
   }
 
   it should "generate frames with the provided threadID and stationID" in {
@@ -108,7 +108,7 @@ class GeneratorSpec(_system: ActorSystem)
     receiveWhile(2.seconds) {
       case _ => true
     }
-    val beZeroOrOne = be === 0 or be === 1
+    val beZeroOrOne = be(0) or be(1)
     def latency = {
       generator ! Generator.GetLatency
       expectMsgClass(classOf[Generator.Latency]) match {
