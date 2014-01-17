@@ -1,6 +1,6 @@
 package edu.nrao.vlite
 
-import akka.actor.Actor
+import akka.actor.{ Actor, Props }
 
 object Transporter {
   case object Start
@@ -84,6 +84,9 @@ final class EthernetTransporter(val device: String, val dst: MAC)
 }
 
 object EthernetTransporter {
+  def props(device: String, dst: MAC): Props =
+    Props(classOf[EthernetTransporter], device, dst)
+
   case class OpenWarning(message: String)
 
   class OpenException(device: String, cause: String)
