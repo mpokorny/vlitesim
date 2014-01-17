@@ -8,6 +8,7 @@ final class Generator(
   val threadID: Int,
   val stationID: Int,
   val transporter: ActorRef,
+  val pace: FiniteDuration,
   decimation: Int = 1) extends Actor with ActorLogging {
 
   import context._
@@ -57,9 +58,9 @@ final class Generator(
       secFromRefEpoch = Generator.secondsFromRefEpoch
       stream = Some(system.scheduler.schedule(
         0.seconds,
-        durationPerFrame,
+        pace,
         self,
-        Generator.NextFrame))
+        Generator.GenFrames))
       become(running)
     case Generator.GetLatency =>
       sender ! Generator.Latency(0)
@@ -67,8 +68,14 @@ final class Generator(
   }
 
   def running: Receive = {
-    case Generator.NextFrame =>
-      transporter ! Transporter.Transport(nextFrame.frame)
+    case Generator.GenFrames => {
+      val (sec, count) = Generator.timeFromRefEpoch
+      val decCount = count / decimation
+      val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
+        (decCount - numberWithinSec))
+      for (i <- 0 until numFrames)
+        transporter ! Transporter.Transport(nextFrame.frame)
+    }
     case Generator.Stop =>
       stream.foreach(_.cancel)
       stream = None
@@ -84,8 +91,15 @@ object Generator {
     threadID: Int,
     stationID: Int,
     transporter: ActorRef,
+    pace: FiniteDuration = 1.millis,
     decimation: Int = 1): Props =
-    Props(classOf[Generator], threadID, stationID, transporter, decimation)
+    Props(
+      classOf[Generator],
+      threadID,
+      stationID,
+      transporter,
+      pace,
+      decimation)
 
   val samplesPerSec = 128 * 1000000
 
@@ -93,6 +107,8 @@ object Generator {
     VLITEFrame.dataArraySize / ((VLITEHeader.bitsPerSampleLess1 + 1) / 8)
 
   val framesPerSec = samplesPerSec / samplesPerFrame
+
+  private val framesPerMs = framesPerSec / 1000.0
 
   val referenceEpoch = {
     val now = DateTime.now(DateTimeZone.UTC)
@@ -104,13 +120,21 @@ object Generator {
     (2 * (referenceEpoch.getYear - 2000) +
       ((referenceEpoch.getMonthOfYear - 1) / 6))
 
-  def secondsFromRefEpoch: Int =
-    (new JodaDuration(referenceEpoch, DateTime.now(DateTimeZone.UTC))).
-      getStandardSeconds.toInt
+  def timeFromRefEpoch: (Int, Int) = {
+    val diff =
+      new JodaDuration(referenceEpoch, DateTime.now(DateTimeZone.UTC))
+    val sec = diff.toStandardSeconds
+    val frac = diff.minus(sec.toStandardDuration)
+    (sec.getSeconds, (frac.getMillis * framesPerMs).floor.toInt)
+  }
+
+  def secondsFromRefEpoch: Int = timeFromRefEpoch._1
+
+  def framesFromRefEpoch: Int = timeFromRefEpoch._2
 
   case object Start
   case object Stop
-  case object NextFrame
+  case object GenFrames
   case object GetLatency
   case class Latency(seconds: Int)
 }
