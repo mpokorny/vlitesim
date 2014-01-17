@@ -11,7 +11,12 @@ libraryDependencies ++= Seq(
   "junit" % "junit" % "4.11" % "test",
   "com.novocode" % "junit-interface" % "0.10" % "test",
   "joda-time" % "joda-time" % "2.3",
-  "org.joda" % "joda-convert" % "1.5"
+  "org.joda" % "joda-convert" % "1.5",
+  "net.sf.jopt-simple" % "jopt-simple" % "4.6"
 )
+
+scalacOptions ++= Seq("-deprecation")
+
+resolvers += "snapshots" at "https://oss.sonatype.org/content/repositories/snapshots"
 
 testOptions += Tests.Argument(TestFrameworks.JUnit, "-v")
