@@ -1,6 +1,8 @@
 package edu.nrao.vlite
 
 import akka.actor._
+import akka.util.Timeout
+import akka.pattern.{ ask, pipe }
 import scala.concurrent.duration._
 import scala.collection.mutable
 
@@ -35,6 +37,8 @@ final class Emulator(
         decimation = decimation))
   }
 
+  protected implicit val queryTimeout = Timeout(1.seconds)
+
   def receive: Receive = idle
 
   def idle: Receive = queries orElse {
@@ -59,37 +63,48 @@ final class Emulator(
 
   private var latencyRequesters = Vector.empty[ActorRef]
 
+  private var latencyTimeout: Option[Cancellable] = None
+
   private def haveAllLatencies = latencies forall (_ != -1)
 
-  private def resetLatencies {
+  private def resetLatencies() {
     for (i <- 0 until latencies.length) latencies(i) = -1
+    latencyRequesters = Vector.empty
+    latencyTimeout foreach (_.cancel)
+    latencyTimeout = None
+  }
+
+  private def sendLatencyResponses() {
+    val values = (sourceIDs.zip(latencies).filter {
+      case (_, -1) => false
+      case _ => true
+    }).toMap
+    for (r <- latencyRequesters) r ! Emulator.Latencies(values)
+    resetLatencies()
   }
 
   def getGenLatencies: Receive = {
     case Emulator.GetGeneratorLatencies =>
-      if (latencyRequesters.isEmpty)
+      if (latencyRequesters.isEmpty) {
         for (g <- generators) g ! Generator.GetLatency
+        latencyTimeout = Some(system.scheduler.scheduleOnce(
+          queryTimeout.duration,
+          self,
+          Emulator.LatenciesTimeout))
+      }
       latencyRequesters = latencyRequesters :+ sender
     case Generator.Latency(l) =>
-      latencies(latencies.indexOf(sender)) = l
-      if (haveAllLatencies) {
-        val values = sourceIDs.zip(latencies).toMap
-        for (r <- latencyRequesters) r ! Emulator.Latencies(values)
-        latencyRequesters = Vector.empty
-        resetLatencies
-      }
+      latencies(generators.indexOf(sender)) = l
+      if (haveAllLatencies)
+        sendLatencyResponses()
+    case Emulator.LatenciesTimeout =>
+      sendLatencyResponses()
   }
 
-  private var bufferCountRequesters = Vector.empty[ActorRef]
-
   def getBufferCount: Receive = {
-    case Transporter.GetBufferCount =>
-      if (bufferCountRequesters.isEmpty)
-        transporter ! Transporter.GetBufferCount
-      bufferCountRequesters = bufferCountRequesters :+ sender
-    case count: Transporter.BufferCount =>
-      for (r <- bufferCountRequesters) r ! count
-      bufferCountRequesters = Vector.empty
+    case Transporter.GetBufferCount => {
+      (transporter ? Transporter.GetBufferCount) pipeTo sender
+    }
   }
 }
 
@@ -110,4 +125,5 @@ object Emulator {
   case object Stop
   case object GetGeneratorLatencies
   case class Latencies(values: Map[(Int, Int), Int])
+  case object LatenciesTimeout
 }

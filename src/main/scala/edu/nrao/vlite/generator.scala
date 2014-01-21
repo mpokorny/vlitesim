@@ -42,12 +42,22 @@ final class Generator(
         numberWithinSec = numberWithinSec,
         threadID = threadID,
         stationID = stationID)))
+    incNumberWithinSec()
+    eth
+  }
+
+  protected def incNumberWithinSec() {
     numberWithinSec += 1
     if (numberWithinSec == framesPerSec) {
       numberWithinSec = 0
       secFromRefEpoch += 1
     }
-    eth
+  }
+
+  protected def stop() {
+    stream.foreach(_.cancel)
+    stream = None
+    become(idle)
   }
 
   def receive = idle
@@ -61,10 +71,24 @@ final class Generator(
         pace,
         self,
         Generator.GenFrames))
-      become(running)
+      become(starting)
     case Generator.GetLatency =>
       sender ! Generator.Latency(0)
     case _ =>
+  }
+
+  def starting: Receive = {
+    case Generator.GenFrames =>
+      val (sec, count) = Generator.timeFromRefEpoch
+      val decCount = count / decimation
+      secFromRefEpoch = sec
+      numberWithinSec = decCount
+      incNumberWithinSec()
+      become(running)
+    case Generator.GetLatency =>
+      sender ! Generator.Latency(0)
+    case Generator.Stop =>
+      stop()
   }
 
   def running: Receive = {
@@ -77,9 +101,7 @@ final class Generator(
         transporter ! Transporter.Transport(nextFrame.frame)
     }
     case Generator.Stop =>
-      stream.foreach(_.cancel)
-      stream = None
-      become(idle)
+      stop()
     case Generator.GetLatency =>
       sender ! Generator.Latency(
         Generator.secondsFromRefEpoch - secFromRefEpoch)
