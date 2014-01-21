@@ -11,7 +11,7 @@ case class EmulatorInstance(
   stationID: Int,
   threadIDs: List[Int],
   device: String,
-  frameRate: Int,
+  decimation: Int,
   pace: FiniteDuration,
   destination: MAC)
 
@@ -29,7 +29,7 @@ class SettingsImpl(config: Config) extends Extension {
           },
           threadIDs = confObj.getIntList("threadIDs").toList.map(_.toInt),
           device = confObj.getString("device"),
-          frameRate = confObj.getInt("frame-rate"),
+          decimation = confObj.getInt("decimation"),
           pace = confObj.getDuration("pace", MILLISECONDS).millis,
           destination = MAC(confObj.getString("destination")))
       }

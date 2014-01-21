@@ -23,7 +23,7 @@ class Simulator extends Bootable {
               instance.destination,
               instance.threadIDs map (tid => (instance.stationID, tid)),
               instance.pace,
-              Generator.framesPerSec / instance.frameRate),
+              instance.decimation),
             s"emulator${index}")
       }
   }
