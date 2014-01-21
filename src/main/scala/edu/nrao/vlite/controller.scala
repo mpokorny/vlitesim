@@ -55,14 +55,33 @@ class Controller extends Actor with ActorLogging {
       case _ => false
     }).get._1
 
-  var getIds: Option[Cancellable] =
-    Some(system.scheduler.schedule(
+  protected def findEmulator(ref: ActorRef): Option[EmulatorInstance] = {
+    emulatorRefs find {
+      case (_, (Some(ref), _)) => true
+      case _ => false
+    } map {
+      case (idx, _) => settings.emulatorInstances(idx)
+    }
+  }
+
+  var getIds: Option[Cancellable] = None
+
+  override def preStart() {
+    getIds = Some(system.scheduler.schedule(
       0.second,
       1.second,
       self,
       Controller.GetIdentities))
+    system.scheduler.schedule(
+      1.second,
+      1.second,
+      self,
+      Controller.TriggerDebug)
+  }
 
-  system.scheduler.schedule(1.second, 1.second, self, Controller.TriggerDebug)
+  override def postStop() {
+    (0 until emulatorRefs.size) foreach (i => stopEmulator(i))
+  }
 
   def receive: Receive = {
     case Controller.GetIdentities =>
@@ -99,8 +118,14 @@ class Controller extends Actor with ActorLogging {
     case Controller.TriggerDebug =>
       currentEmulatorRefs foreach { _ ! Emulator.GetGeneratorLatencies }
       currentEmulatorRefs foreach { _ ! Transporter.GetBufferCount }
+    case latencies: Emulator.Latencies =>
+      log.debug(latencies.toString)
+    case count: Transporter.BufferCount =>
+      findEmulator(sender) foreach { em =>
+        log.debug("{}({}) {}", em.hostname, em.device, count)
+      }
     case msg =>
-      log.info(msg.toString)
+      log.debug(msg.toString)
   }
 }
 
