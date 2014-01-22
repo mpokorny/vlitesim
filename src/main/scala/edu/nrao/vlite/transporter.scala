@@ -65,7 +65,7 @@ final class EthernetTransporter(val device: String, val dst: MAC)
     val mtu = new java.io.BufferedReader(
       new java.io.FileReader(s"/sys/class/net/$device/mtu")).readLine.toInt
     if (mtu < 9000)
-      context.parent ! OpenWarning("'$device' MTU is small ($mtu)")
+      context.parent ! OpenWarning(s"'$device' MTU is small ($mtu)")
     src = getMAC(device).get
   }
 
