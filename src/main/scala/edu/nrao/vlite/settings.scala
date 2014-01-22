@@ -45,7 +45,7 @@ class SettingsImpl(config: Config) extends Extension {
   val hostname = config.getString(s"${transport}.hostname")
 
   def remoteAddress(host: String): Address =
-    Address(protocol, "vlite", host, port)
+    Address(s"akka.$protocol", "vlite", host, port)
 
   def remotePath(host: String, name: String): String =
     "akka." + remoteAddress(host).toString + s"/user/$name"
