@@ -13,6 +13,15 @@ package object pcap {
     def inject[T <: Frame[T]](eth: Ethernet[T])(
       implicit reader: FrameReader[Ethernet[T]],
       builder: FrameBuilder[Ethernet[T]]): Int = inject(eth.frame)
+
+    def sendPacket[_](buffer: TypedBuffer[_]): Int = {
+      buffer.byteBuffer.rewind
+      pcap.sendPacket(buffer.byteBuffer)
+    }
+
+    def sendPacket[T <: Frame[T]](eth: Ethernet[T])(
+      implicit reader: FrameReader[Ethernet[T]],
+      builder: FrameBuilder[Ethernet[T]]): Int = sendPacket(eth.frame)
   }
 
   def getMAC(ifname: String): Option[MAC] = {
