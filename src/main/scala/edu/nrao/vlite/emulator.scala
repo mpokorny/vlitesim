@@ -12,7 +12,7 @@ final class Emulator(
   val sourceIDs: Seq[(Int, Int)],
   val pace: FiniteDuration = Emulator.defaultPace,
   val decimation: Int = Emulator.defaultDecimation)
-    extends Actor {
+    extends Actor with ActorLogging {
 
   import context._
 
@@ -41,20 +41,26 @@ final class Emulator(
 
   def receive: Receive = idle
 
-  def idle: Receive = queries orElse {
-    case Emulator.Start =>
-      for (g <- generators) g ! Generator.Start
-      transporter ! Transporter.Start
-      become(running)
-    case _ =>
+  def idle: Receive = {
+    log.info("stopped")
+    queries orElse {
+      case Emulator.Start =>
+        for (g <- generators) g ! Generator.Start
+        transporter ! Transporter.Start
+        become(running)
+      case _ =>
+    }
   }
 
-  def running: Receive = queries orElse {
-    case Emulator.Stop =>
-      transporter ! Transporter.Stop
-      for (g <- generators) g ! Generator.Stop
-      become(idle)
-    case _ =>
+  def running: Receive = {
+    log.info("started")
+    queries orElse {
+      case Emulator.Stop =>
+        transporter ! Transporter.Stop
+        for (g <- generators) g ! Generator.Stop
+        become(idle)
+      case _ =>
+    }
   }
 
   def queries = getGenLatencies orElse getBufferCount
