@@ -10,6 +10,14 @@ class Controller extends Actor with ActorLogging {
 
   val settings = Settings(context.system)
 
+  override def supervisorStrategy = {
+    import akka.actor.SupervisorStrategy._
+
+    OneForOneStrategy(maxNrOfRetries = 1, withinTimeRange = 1.minute) {
+      case _ => Restart
+    }
+  }
+
   protected def emulatorActor(instance: EmulatorInstance, index: Int):
       Option[ActorRef] =
     Try(actorOf(Emulator.props(
