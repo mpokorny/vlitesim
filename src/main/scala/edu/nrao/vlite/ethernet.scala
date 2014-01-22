@@ -9,7 +9,7 @@ final class MAC(
   val octet3: Byte,
   val octet4: Byte,
   val octet5: Byte
-) extends Frame[MAC] {
+) extends Frame[MAC] with Serializable {
   override def equals(other: Any) = other match {
     case that: MAC =>
       that.octet0 == that.octet0 &&
