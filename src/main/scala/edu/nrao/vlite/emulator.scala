@@ -48,6 +48,8 @@ final class Emulator(
         for (g <- generators) g ! Generator.Start
         transporter ! Transporter.Start
         become(running)
+      case EthernetTransporter.OpenWarning(msg) =>
+        log.warning(msg)
       case _ =>
     }
   }
@@ -59,6 +61,8 @@ final class Emulator(
         transporter ! Transporter.Stop
         for (g <- generators) g ! Generator.Stop
         become(idle)
+      case EthernetTransporter.OpenWarning(msg) =>
+        log.warning(msg)
       case _ =>
     }
   }
