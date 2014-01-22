@@ -117,8 +117,9 @@ object TransporterSpec {
   case class Packet(buffer: TypedBuffer[_])
 
   class TestTransporter(destination: ActorRef) extends Transporter {
-    protected def sendBuffer(buffer: TypedBuffer[_]) {
+    protected def sendBuffer(buffer: TypedBuffer[_]) = {
       destination ! Packet(buffer)
+      true
     }
   }
 }

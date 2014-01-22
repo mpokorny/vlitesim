@@ -19,9 +19,10 @@ trait Transporter extends Actor {
 
   def transporting: Receive = getBufferCount orElse {
     case Transport(buffer) =>
-      sendBuffer(buffer)
-      if (bufferCount < Long.MaxValue) bufferCount += 1
-      else bufferCount = 0
+      if (sendBuffer(buffer)) {
+        if (bufferCount < Long.MaxValue) bufferCount += 1
+        else bufferCount = 0
+      }
     case Stop =>
       context.become(idle)
     case _ =>
@@ -38,7 +39,7 @@ trait Transporter extends Actor {
       sender ! BufferCount(bufferCount)
   }
 
-  protected def sendBuffer(buffer: TypedBuffer[_]): Unit
+  protected def sendBuffer(buffer: TypedBuffer[_]): Boolean
 }
 
 final class EthernetTransporter(val device: String, val dst: MAC)
@@ -74,10 +75,10 @@ final class EthernetTransporter(val device: String, val dst: MAC)
     src.octet0, src.octet1, src.octet2, src.octet3, src.octet4, src.octet5).
     toArray
   
-  protected def sendBuffer(buffer: TypedBuffer[_]) {
+  protected def sendBuffer(buffer: TypedBuffer[_]) = {
     buffer.byteBuffer.rewind
     buffer.byteBuffer.put(macs)
-    pcap.inject(buffer)
+    pcap.sendPacket(buffer) == 0
   }
 
   override def toString = s"EthernetTransporter($device)"
