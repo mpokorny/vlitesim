@@ -13,19 +13,6 @@ class Simulator extends Bootable {
 
     if (settings.hostname == settings.controllerHostname)
       system.actorOf(Props[Controller], "controller")
-
-    settings.emulatorInstances.filter(_.hostname == settings.hostname).
-      zipWithIndex foreach {
-        case (instance, index) =>
-          system.actorOf(
-            Emulator.props(
-              instance.device,
-              instance.destination,
-              instance.threadIDs map (tid => (instance.stationID, tid)),
-              instance.pace,
-              instance.decimation),
-            s"emulator${index}")
-      }
   }
 
   def shutdown {

@@ -1,77 +1,80 @@
 package edu.nrao.vlite
 
 import akka.actor._
+import akka.remote.RemoteScope
 import scala.concurrent.duration._
+import scala.util.{ Try, Success, Failure }
 
 class Controller extends Actor with ActorLogging {
   import context._
 
   val settings = Settings(context.system)
 
-  val emulatorSelections: Map[Int, (String, Int, ActorSelection)] =
-    (settings.emulatorInstances.groupBy (_.hostname) map {
-      case (hostname, ems) =>
-        ems.zipWithIndex map {
-          case (em, idx) =>
-            (em.index,
-              (hostname,
-                idx,
-                actorSelection(settings.remotePath(hostname, s"emulator$idx"))))
-        }
-    }).flatten.toMap
+  protected def emulatorActor(instance: EmulatorInstance, index: Int):
+      Option[ActorRef] =
+    Try(actorOf(Emulator.props(
+      device = instance.device,
+      destination = instance.destination,
+      sourceIDs = instance.threadIDs map (tid => (instance.stationID, tid)),
+      pace = instance.pace,
+      decimation = instance.decimation).
+      withDeploy(Deploy(
+        scope = RemoteScope(settings.remoteAddress(instance.hostname)))),
+      s"emulator${index}")).toOption
 
-  var emulatorRefs: Map[Int, (Option[ActorRef], Boolean)] = Map(
-    (for (i <- emulatorSelections.keys)
-    yield i -> (None, true)).toList:_*)
+  var emulators: Map[Int, EmulatorInfo] = Map.empty
 
-  protected def currentEmulatorRefs =
-    emulatorRefs.values.withFilter(_._1.isDefined).map(_._1.get)
+  protected def haveAllEmulatorRefs =
+    emulators.values.forall(_.optActorRef.isDefined)
 
-  protected def haveAllEmulatorRefs = emulatorRefs.values.forall(_._1.isDefined)
+  protected def currentEmulators = emulators.values withFilter {
+    case EmulatorInfo(_, Some(_), _) => true
+    case _ => false
+  } map (_.optActorRef.get)
 
-  protected def startEmulator(index: Int) {
-    if (emulatorRefs contains index) {
-      emulatorRefs(index) match {
-        case (optRef, _) =>
-          optRef foreach (_ ! Emulator.Start)
-          emulatorRefs = emulatorRefs.updated(index, (optRef, true))
+
+  protected def changeEmulatorState(index: Int, newState: Boolean) {
+    if (emulators contains index) {
+      val ei = emulators(index)
+      ei.optActorRef foreach { ref =>
+        ref ! (if (newState) Emulator.Start else Emulator.Stop)
       }
+      emulators = emulators.updated(
+        index,
+        EmulatorInfo(ei.instance, ei.optActorRef, newState))
     }
+  }
+  
+  protected def startEmulator(index: Int) {
+    changeEmulatorState(index, true)
   }
 
   protected def stopEmulator(index: Int) {
-    if (emulatorRefs contains index) {
-      emulatorRefs(index) match {
-        case (optRef, _) =>
-          optRef foreach (_ ! Emulator.Stop)
-          emulatorRefs = emulatorRefs.updated(index, (optRef, false))
-      }
-    }
+    changeEmulatorState(index, false)
   }
 
-  protected def findEmulatorIndex(hostname: String, index: Int) =
-    (emulatorSelections find {
-      case (_, (hostname, index, _)) => true
-      case _ => false
-    }).get._1
-
-  protected def findEmulator(ref: ActorRef): Option[EmulatorInstance] = {
-    emulatorRefs find {
-      case (_, (Some(ref), _)) => true
+  protected def findEmulator(ref: ActorRef): Option[Int] = {
+    emulators find {
+      case (_, EmulatorInfo(_, Some(r), _)) if r == ref => true
       case _ => false
     } map {
-      case (idx, _) => settings.emulatorInstances(idx)
+      case (idx, _) => idx
     }
   }
 
-  var getIds: Option[Cancellable] = None
+  var getRefs: Option[Cancellable] = None
 
   override def preStart() {
-    getIds = Some(system.scheduler.schedule(
+    emulators = (settings.emulatorInstances.zipWithIndex map {
+      case (em, index) =>
+        (index, EmulatorInfo(em, emulatorActor(em, index), true))
+    }).toMap
+    currentEmulators foreach { _ ! Emulator.Start }
+    getRefs = Some(system.scheduler.schedule(
       0.second,
       1.second,
       self,
-      Controller.GetIdentities))
+      Controller.GetEmulatorRefs))
     system.scheduler.schedule(
       1.second,
       1.second,
@@ -79,53 +82,41 @@ class Controller extends Actor with ActorLogging {
       Controller.TriggerDebug)
   }
 
-  override def postStop() {
-    (0 until emulatorRefs.size) foreach (i => stopEmulator(i))
-  }
-
   def receive: Receive = {
-    case Controller.GetIdentities =>
-      emulatorRefs foreach {
-        case (idx, (None, _)) =>
-          emulatorSelections(idx) match {
-            case (_, _, sel) => sel ! Identify(idx)
+    case Controller.GetEmulatorRefs =>
+      emulators = emulators map {
+        case (index, EmulatorInfo(em, None, state)) =>
+          val ref = emulatorActor(em, index)
+          ref foreach { act =>
+            act ! (if (state) Emulator.Start else Emulator.Stop)
           }
-        case _ =>
+          (index, EmulatorInfo(em, ref, state))
+        case other =>
+          other
       }
-    case ActorIdentity(idx: Int, Some(ref)) =>
-      val isStarted = emulatorRefs(idx)._2
-      emulatorRefs = emulatorRefs.updated(idx, (Some(ref), isStarted))
-      if (isStarted) ref ! Emulator.Start
       if (haveAllEmulatorRefs) {
-        getIds.foreach(_.cancel)
-        getIds = None
+        getRefs map (_.cancel)
+        getRefs = None
       }
-    case _: ActorIdentity =>
     case Controller.Shutdown =>
       system.shutdown
     case Controller.StartAll =>
-      (0 until emulatorRefs.size) foreach (i => startEmulator(i))
+      (0 until emulators.size) foreach (i => startEmulator(i))
     case Controller.StopAll =>
-      (0 until emulatorRefs.size) foreach (i => stopEmulator(i))
+      (0 until emulators.size) foreach (i => stopEmulator(i))
     case Controller.StartOne(index) =>
       startEmulator(index)
     case Controller.StopOne(index) =>
       stopEmulator(index)
-    case Controller.StartOneOnHost(hostname, index) =>
-      startEmulator(findEmulatorIndex(hostname, index))
-    case Controller.StopOneOnHost(hostname, index) =>
-      stopEmulator(findEmulatorIndex(hostname, index))
     case Controller.TriggerDebug =>
-      currentEmulatorRefs foreach { _ ! Emulator.GetGeneratorLatencies }
-      currentEmulatorRefs foreach { _ ! Transporter.GetBufferCount }
+      currentEmulators foreach { _ ! Emulator.GetGeneratorLatencies }
+      currentEmulators foreach { _ ! Transporter.GetBufferCount }
     case latencies: Emulator.Latencies =>
-      log.debug(latencies.toString)
+      log.info(latencies.toString)
     case count: Transporter.BufferCount =>
-      findEmulator(sender) foreach { em =>
-        log.debug("{}({}) {}", em.hostname, em.device, count)
+      findEmulator(sender) foreach { idx =>
+        log.info("emulator{} {}", idx, count)
       }
-    case msg =>
-      log.debug(msg.toString)
   }
 }
 
@@ -135,8 +126,11 @@ object Controller {
   case object StopAll
   case class StartOne(index: Int)
   case class StopOne(index: Int)
-  case class StartOneOnHost(hostname: String, index: Int)
-  case class StopOneOnHost(hostname: String, index: Int)
   case object TriggerDebug
-  case object GetIdentities
+  case object GetEmulatorRefs
 }
+
+case class EmulatorInfo(
+  instance: EmulatorInstance,
+  optActorRef: Option[ActorRef],
+  isStarted: Boolean)

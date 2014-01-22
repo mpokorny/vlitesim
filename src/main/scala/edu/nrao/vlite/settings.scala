@@ -6,7 +6,6 @@ import com.typesafe.config.{ Config, ConfigObject }
 import akka.remote.RemoteScope
 
 case class EmulatorInstance(
-  index: Int,
   hostname: String,
   stationID: Int,
   threadIDs: List[Int],
@@ -22,7 +21,6 @@ class SettingsImpl(config: Config) extends Extension {
       case (obj: ConfigObject, index) => {
         val confObj = obj.toConfig
         EmulatorInstance(
-          index = index,
           hostname = confObj.getString("hostname"),
           stationID = confObj.getString("stationID").getBytes.take(2) match {
             case Array(first, second) => (first.toInt << 8) + second.toInt
