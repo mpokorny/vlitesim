@@ -5,10 +5,12 @@ import akka.util.Timeout
 import akka.pattern.{ ask, pipe }
 import scala.concurrent.duration._
 import scala.collection.mutable
+import java.net.InetSocketAddress
 
 final class Emulator(
-  val device: String,
-  val destination: MAC,
+  val transport: Emulator.Transport.Transport,
+  val device: Option[String],
+  val destination: String,
   val sourceIDs: Seq[(Int, Int)],
   val pace: FiniteDuration = Emulator.defaultPace,
   val decimation: Int = Emulator.defaultDecimation)
@@ -16,16 +18,20 @@ final class Emulator(
 
   import context._
 
-  override def supervisorStrategy = {
-    import akka.actor.SupervisorStrategy._
-
-    OneForOneStrategy(maxNrOfRetries = 1, withinTimeRange = 1.minute) {
-      case _ => Restart
+  val transporter = transport match {
+    case Emulator.Transport.Ethernet =>
+      actorOf(
+        EthernetTransporter.props(device.get, MAC(destination)),
+        "transporter")
+    case Emulator.Transport.UDP => {
+      val hostAndPort = destination.split(':')
+      val hostname = hostAndPort(0)
+      val port = hostAndPort(1).toInt
+      actorOf(
+        UdpTransporter.props(new InetSocketAddress(hostname, port)),
+        "transporter")
     }
   }
-
-  val transporter =
-    actorOf(EthernetTransporter.props(device, destination), "transporter")
 
   val generators = sourceIDs map {
     case (stationID, threadID) =>
@@ -39,33 +45,62 @@ final class Emulator(
 
   protected implicit val queryTimeout = Timeout(1.seconds)
 
+  override def preStart() {
+    println(s"Start ${self.path}")
+  }
+
+  override def preRestart(reason: Throwable, message: Option[Any]) {
+    if (isRunning) self ! Emulator.WasRunning
+    super.preRestart(reason, message)
+  }
+
+  protected def startChildren() {
+    for (g <- generators) g ! Generator.Start
+    transporter ! Transporter.Start
+  }
+
+  protected def stopChildren() {
+    transporter ! Transporter.Stop
+    for (g <- generators) g ! Generator.Stop
+  }
+
+  protected var isRunning: Boolean = false
+
+  protected var runningStateWasSet: Boolean = false
+
   def receive: Receive = idle
 
   def idle: Receive = {
     log.info("stopped")
-    queries orElse {
+    isRunning = false
+    stopChildren()
+    common orElse {
       case Emulator.Start =>
-        for (g <- generators) g ! Generator.Start
-        transporter ! Transporter.Start
+        runningStateWasSet = true
         become(running)
-      case EthernetTransporter.OpenWarning(msg) =>
-        log.warning(msg)
-      case _ =>
+      case Emulator.WasRunning =>
+        if (!runningStateWasSet)
+          become(running)
     }
   }
 
   def running: Receive = {
     log.info("started")
-    queries orElse {
+    isRunning = true
+    startChildren()
+    common orElse {
       case Emulator.Stop =>
-        transporter ! Transporter.Stop
-        for (g <- generators) g ! Generator.Stop
+        runningStateWasSet = true
         become(idle)
-      case EthernetTransporter.OpenWarning(msg) =>
-        log.warning(msg)
-      case _ =>
+      case Emulator.WasRunning =>
     }
   }
+
+  def common: Receive =
+    queries orElse {
+      case Transporter.OpenWarning(msg) =>
+        log.warning(msg)
+    }
 
   def queries = getGenLatencies orElse getBufferCount
 
@@ -120,12 +155,13 @@ final class Emulator(
 
 object Emulator {
   def props(
-    device: String,
-    destination: MAC,
+    transport: Transport.Transport,
+    device: Option[String],
+    destination: String,
     sourceIDs: Seq[(Int, Int)],
     pace: FiniteDuration = defaultPace,
     decimation: Int = defaultDecimation): Props =
-    Props(classOf[Emulator], device, destination, sourceIDs, pace, decimation)
+    Props(classOf[Emulator], transport, device, destination, sourceIDs, pace, decimation)
 
   val defaultPace = 1.milli
 
@@ -136,4 +172,10 @@ object Emulator {
   case object GetGeneratorLatencies
   case class Latencies(values: Map[(Int, Int), Int])
   case object LatenciesTimeout
+  case object WasRunning
+
+  object Transport extends Enumeration {
+    type Transport = Value
+    val Ethernet, UDP = Value
+  }
 }

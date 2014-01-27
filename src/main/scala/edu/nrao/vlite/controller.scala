@@ -10,19 +10,12 @@ class Controller extends Actor with ActorLogging {
 
   val settings = Settings(context.system)
 
-  override def supervisorStrategy = {
-    import akka.actor.SupervisorStrategy._
-
-    OneForOneStrategy(maxNrOfRetries = 1, withinTimeRange = 1.minute) {
-      case _ => Restart
-    }
-  }
-
   protected def emulatorActor(instance: EmulatorInstance, index: Int):
       Option[ActorRef] =
     Try(actorOf(Emulator.props(
       device = instance.device,
       destination = instance.destination,
+      transport = instance.transport,
       sourceIDs = instance.threadIDs map (tid => (instance.stationID, tid)),
       pace = instance.pace,
       decimation = instance.decimation).
@@ -54,10 +47,12 @@ class Controller extends Actor with ActorLogging {
   }
   
   protected def startEmulator(index: Int) {
+    stateWasSet = stateWasSet + index
     changeEmulatorState(index, true)
   }
 
   protected def stopEmulator(index: Int) {
+    stateWasSet = stateWasSet + index
     changeEmulatorState(index, false)
   }
 
@@ -73,6 +68,7 @@ class Controller extends Actor with ActorLogging {
   var getRefs: Option[Cancellable] = None
 
   override def preStart() {
+    println(s"Start ${self.path}")
     emulators = (settings.emulatorInstances.zipWithIndex map {
       case (em, index) =>
         (index, EmulatorInfo(em, emulatorActor(em, index), true))
@@ -90,7 +86,24 @@ class Controller extends Actor with ActorLogging {
       Controller.TriggerDebug)
   }
 
+  protected var stateWasSet: Set[Int] = Set.empty
+
+  override def preRestart(reason: Throwable, message: Option[Any]) {
+    self ! Controller.PreviousStates((emulators map {
+      case (index, ei) => (index, ei.isStarted)
+    }).toList)
+    super.preRestart(reason, message)
+  }
+
   def receive: Receive = {
+    case Controller.PreviousStates(states) =>
+      states foreach {
+        case (index, state) =>
+          if (!(stateWasSet contains index)) {
+            if (state) startEmulator(index)
+            else stopEmulator(index)
+          }
+      }
     case Controller.GetEmulatorRefs =>
       emulators = emulators map {
         case (index, EmulatorInfo(em, None, state)) =>
@@ -136,6 +149,7 @@ object Controller {
   case class StopOne(index: Int)
   case object TriggerDebug
   case object GetEmulatorRefs
+  case class PreviousStates(states: List[(Int, Boolean)])
 }
 
 case class EmulatorInfo(

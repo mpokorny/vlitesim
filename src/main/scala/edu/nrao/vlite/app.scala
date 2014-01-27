@@ -6,16 +6,22 @@ import com.typesafe.config.ConfigFactory
 
 class Simulator extends Bootable {
 
+  val version = "20140123.0"
+
   val system = ActorSystem("vlite", ConfigFactory.load.getConfig("vlite"))
 
-  def startup {
+  def startup() {
+    println(s"Starting VLITE simulator (v. $version)...")
+
     val settings = Settings(system)
 
     if (settings.hostname == settings.controllerHostname)
       system.actorOf(Props[Controller], "controller")
   }
 
-  def shutdown {
-    system.shutdown
+  def shutdown() {
+    system.shutdown()
+    system.awaitTermination()
+    println("Stopped VLITE simulator")
   }
 }

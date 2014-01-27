@@ -60,35 +60,54 @@ final class Generator(
     become(idle)
   }
 
+  override def preRestart(reason: Throwable, message: Option[Any]) {
+    if (isRunning) self ! Generator.WasRunning
+    super.preRestart(reason, message)
+  }
+
+  protected var isRunning: Boolean = false
+
+  protected var runningStateWasSet: Boolean = false
+
   def receive = idle
 
   def idle: Receive = {
     case Generator.Start =>
-      numberWithinSec = 0
-      secFromRefEpoch = Generator.secondsFromRefEpoch
-      stream = Some(system.scheduler.schedule(
-        0.seconds,
-        pace,
-        self,
-        Generator.GenFrames))
+      runningStateWasSet = true
       become(starting)
     case Generator.GetLatency =>
       sender ! Generator.Latency(0)
+    case Generator.WasRunning =>
+      if (!runningStateWasSet)
+        become(starting)
     case _ =>
   }
 
   def starting: Receive = {
-    case Generator.GenFrames =>
-      val (sec, count) = Generator.timeFromRefEpoch
-      val decCount = count / decimation
-      secFromRefEpoch = sec
-      numberWithinSec = decCount
-      incNumberWithinSec()
-      become(running)
-    case Generator.GetLatency =>
-      sender ! Generator.Latency(0)
-    case Generator.Stop =>
-      stop()
+    isRunning = true
+    numberWithinSec = 0
+    secFromRefEpoch = Generator.secondsFromRefEpoch
+    stream = Some(system.scheduler.schedule(
+      0.seconds,
+      pace,
+      self,
+      Generator.GenFrames))
+    val result: Receive = {
+      case Generator.GenFrames =>
+        val (sec, count) = Generator.timeFromRefEpoch
+        val decCount = count / decimation
+        secFromRefEpoch = sec
+        numberWithinSec = decCount
+        incNumberWithinSec()
+        become(running)
+      case Generator.GetLatency =>
+        sender ! Generator.Latency(0)
+      case Generator.Stop =>
+        runningStateWasSet = true
+        stop()
+      case Generator.WasRunning =>
+    }
+    result
   }
 
   def running: Receive = {
@@ -101,10 +120,12 @@ final class Generator(
         transporter ! Transporter.Transport(nextFrame.frame)
     }
     case Generator.Stop =>
+      runningStateWasSet = true
       stop()
     case Generator.GetLatency =>
       sender ! Generator.Latency(
         Generator.secondsFromRefEpoch - secFromRefEpoch)
+    case Generator.WasRunning =>
   }
 }
 
@@ -159,4 +180,5 @@ object Generator {
   case object GenFrames
   case object GetLatency
   case class Latency(seconds: Int)
+  case object WasRunning
 }
