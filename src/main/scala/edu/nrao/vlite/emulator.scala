@@ -1,7 +1,6 @@
 package edu.nrao.vlite
 
 import akka.actor._
-import SupervisorStrategy.Restart
 import akka.util.Timeout
 import akka.pattern.{ ask, pipe }
 import scala.concurrent.duration._

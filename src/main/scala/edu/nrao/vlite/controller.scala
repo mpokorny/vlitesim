@@ -1,7 +1,6 @@
 package edu.nrao.vlite
 
 import akka.actor._
-import SupervisorStrategy._
 import akka.remote.RemoteScope
 import scala.concurrent.duration._
 import scala.util.{ Try, Success, Failure }
