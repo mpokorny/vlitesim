@@ -1,6 +1,7 @@
 package edu.nrao.vlite
 
 import akka.actor._
+import SupervisorStrategy.Restart
 import akka.util.Timeout
 import akka.pattern.{ ask, pipe }
 import scala.concurrent.duration._
@@ -49,60 +50,13 @@ final class Emulator(
     println(s"Start ${self.path}")
   }
 
-  override def preRestart(reason: Throwable, message: Option[Any]) {
-    if (isRunning) self ! Emulator.WasRunning
-    super.preRestart(reason, message)
-  }
-
-  protected def startChildren() {
-    for (g <- generators) g ! Generator.Start
-    transporter ! Transporter.Start
-  }
-
-  protected def stopChildren() {
-    transporter ! Transporter.Stop
-    for (g <- generators) g ! Generator.Stop
-  }
-
-  protected var isRunning: Boolean = false
-
-  protected var runningStateWasSet: Boolean = false
-
-  def receive: Receive = idle
-
-  def idle: Receive = {
-    log.info("stopped")
-    isRunning = false
-    stopChildren()
-    common orElse {
-      case Emulator.Start =>
-        runningStateWasSet = true
-        become(running)
-      case Emulator.WasRunning =>
-        if (!runningStateWasSet)
-          become(running)
-    }
-  }
-
-  def running: Receive = {
-    log.info("started")
-    isRunning = true
-    startChildren()
-    common orElse {
-      case Emulator.Stop =>
-        runningStateWasSet = true
-        become(idle)
-      case Emulator.WasRunning =>
-    }
-  }
-
-  def common: Receive =
-    queries orElse {
+  def receive: Receive = 
+    getGenLatencies orElse getBufferCount orElse {
+      case Transporter.OpenException(msg) =>
+        log.error(msg)
       case Transporter.OpenWarning(msg) =>
         log.warning(msg)
     }
-
-  def queries = getGenLatencies orElse getBufferCount
 
   private val latencies = mutable.Seq.fill(generators.length)(-1)
 
@@ -161,14 +115,19 @@ object Emulator {
     sourceIDs: Seq[(Int, Int)],
     pace: FiniteDuration = defaultPace,
     decimation: Int = defaultDecimation): Props =
-    Props(classOf[Emulator], transport, device, destination, sourceIDs, pace, decimation)
+    Props(
+      classOf[Emulator],
+      transport,
+      device,
+      destination,
+      sourceIDs,
+      pace,
+      decimation)
 
   val defaultPace = 1.milli
 
   val defaultDecimation = 1
 
-  case object Start
-  case object Stop
   case object GetGeneratorLatencies
   case class Latencies(values: Map[(Int, Int), Int])
   case object LatenciesTimeout

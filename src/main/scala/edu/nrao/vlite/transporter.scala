@@ -4,14 +4,11 @@ import akka.actor.{ Actor, ActorRef, ActorLogging, Props, Terminated }
 import java.net.InetSocketAddress
 
 object Transporter {
-  case object Start
-  case object Stop
   case class Transport[T <: Frame[T]](buffer: TypedBuffer[Ethernet[T]])
   case object GetBufferCount
   case class BufferCount(count: Long)
   case class OpenWarning(message: String)
   case class OpenException(cause: String) extends Exception(cause)
-  case class PreviousState(bufferCount: Long, wasRunning: Boolean)
 }
 
 trait Transporter extends Actor with ActorLogging {
@@ -19,64 +16,14 @@ trait Transporter extends Actor with ActorLogging {
 
   protected var bufferCount: Long = 0L
 
-  protected var isRunning: Boolean = false
-
-  protected var runningStateWasSet: Boolean = false
-
-  override def preRestart(reason: Throwable, message: Option[Any]) {
-    self ! PreviousState(bufferCount, isRunning)
-    super.preRestart(reason, message)
-  }
-
-  protected def addToBufferCount(count: Long) {
-    if (Long.MaxValue - count >= bufferCount)
-      bufferCount += count
-    else
-      bufferCount = bufferCount - 1 - (Long.MaxValue - count)
-  }
-
-  def receive = idle
-
-  def idle: Receive = {
-    log.info("idle")
-    isRunning = false
-    getBufferCount orElse {
-      case Start =>
-        runningStateWasSet = true
-        context.become(transporting)
-      case PreviousState(count, wasRunning) =>
-        addToBufferCount(count)
-        if (!runningStateWasSet && wasRunning)
-          context.become(transporting)
-      case Transport(_) =>
-    }
-  }
-
-  def transporting: Receive = {
-    log.info("transporting")
-    isRunning = true
-    transport orElse getBufferCount orElse {
-      case Stop =>
-        runningStateWasSet = true
-        context.become(idle)
-      case PreviousState(count, wasRunning) =>
-        addToBufferCount(count)
-        if (!runningStateWasSet && !wasRunning)
-          context.become(idle)
-    }
-  }
-
-  protected def getBufferCount: Receive = {
-    case GetBufferCount =>
-      sender ! BufferCount(bufferCount)
-  }
-
-  protected def transport: Receive = {
+  def receive: Receive = {
     case Transport(buffer) =>
       if (sendBuffer(buffer)) {
         if (bufferCount < Long.MaxValue) bufferCount += 1
         else bufferCount = 0
       }
+    case GetBufferCount =>
+      sender ! BufferCount(bufferCount)
   }
 
   protected def sendBuffer(buffer: TypedBuffer[_]): Boolean
@@ -155,12 +102,7 @@ final class UdpTransporter(val dst: InetSocketAddress)
     (channel.map { ch =>
       val b = buffer.byteBuffer
       b.rewind
-      try {
-        ch.write(b) == b.limit
-      } catch {
-        case _: java.net.PortUnreachableException =>
-          throw new OpenException(s"Destination port unreachable at $dst")
-      }
+      ch.write(b) == b.limit
     }).getOrElse(false)
   }
 

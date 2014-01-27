@@ -54,37 +54,14 @@ final class Generator(
     }
   }
 
-  protected def stop() {
+  override def postStop() {
     stream.foreach(_.cancel)
     stream = None
-    become(idle)
   }
 
-  override def preRestart(reason: Throwable, message: Option[Any]) {
-    if (isRunning) self ! Generator.WasRunning
-    super.preRestart(reason, message)
-  }
-
-  protected var isRunning: Boolean = false
-
-  protected var runningStateWasSet: Boolean = false
-
-  def receive = idle
-
-  def idle: Receive = {
-    case Generator.Start =>
-      runningStateWasSet = true
-      become(starting)
-    case Generator.GetLatency =>
-      sender ! Generator.Latency(0)
-    case Generator.WasRunning =>
-      if (!runningStateWasSet)
-        become(starting)
-    case _ =>
-  }
+  def receive = starting
 
   def starting: Receive = {
-    isRunning = true
     numberWithinSec = 0
     secFromRefEpoch = Generator.secondsFromRefEpoch
     stream = Some(system.scheduler.schedule(
@@ -102,10 +79,6 @@ final class Generator(
         become(running)
       case Generator.GetLatency =>
         sender ! Generator.Latency(0)
-      case Generator.Stop =>
-        runningStateWasSet = true
-        stop()
-      case Generator.WasRunning =>
     }
     result
   }
@@ -119,13 +92,9 @@ final class Generator(
       for (i <- 0 until numFrames)
         transporter ! Transporter.Transport(nextFrame.frame)
     }
-    case Generator.Stop =>
-      runningStateWasSet = true
-      stop()
     case Generator.GetLatency =>
       sender ! Generator.Latency(
         Generator.secondsFromRefEpoch - secFromRefEpoch)
-    case Generator.WasRunning =>
   }
 }
 
@@ -175,10 +144,7 @@ object Generator {
 
   def framesFromRefEpoch: Int = timeFromRefEpoch._2
 
-  case object Start
-  case object Stop
   case object GenFrames
   case object GetLatency
   case class Latency(seconds: Int)
-  case object WasRunning
 }
