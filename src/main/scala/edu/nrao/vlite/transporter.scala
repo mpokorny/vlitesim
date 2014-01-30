@@ -1,10 +1,13 @@
 package edu.nrao.vlite
 
 import akka.actor.{ Actor, ActorRef, ActorLogging, Props, Terminated }
-import java.net.InetSocketAddress
+import akka.util.ByteString
+import akka.io._
+import java.net.{ InetAddress, Inet4Address, InetSocketAddress }
+import java.nio.ByteOrder
 
 object Transporter {
-  case class Transport[T <: Frame[T]](buffer: TypedBuffer[Ethernet[T]])
+  case class Transport(byteString: ByteString)
   case object GetBufferCount
   case class BufferCount(count: Long)
   case class OpenWarning(message: String)
@@ -17,8 +20,8 @@ trait Transporter extends Actor with ActorLogging {
   protected var bufferCount: Long = 0L
 
   def receive: Receive = {
-    case Transport(buffer) =>
-      if (sendBuffer(buffer)) {
+    case Transport(byteString) =>
+      if (send(byteString)) {
         if (bufferCount < Long.MaxValue) bufferCount += 1
         else bufferCount = 0
       }
@@ -26,10 +29,12 @@ trait Transporter extends Actor with ActorLogging {
       sender ! BufferCount(bufferCount)
   }
 
-  protected def sendBuffer(buffer: TypedBuffer[_]): Boolean
+  protected def send(byteString: ByteString): Boolean
 }
 
-final class EthernetTransporter(val device: String, val dst: MAC)
+abstract class EthernetTransporter[C <: EthernetContext, T <: HasEtherCode](
+  val device: String,
+  val dst: MAC)
     extends Transporter {
   import edu.nrao.vlite.pcap._
   import Transporter._
@@ -39,6 +44,19 @@ final class EthernetTransporter(val device: String, val dst: MAC)
   protected var pcap: Pcap = null
 
   protected var src: MAC = null
+
+  protected val pipelineStage: EthernetStage[C, T]
+
+  protected val pipelineContext: C
+
+  private val PipelinePorts(pipelinePort, _, _) =
+    PipelineFactory.buildFunctionTriple(pipelineContext, pipelineStage)
+
+  private def toBinary(eth: Ethernet[T]): ByteString =
+    pipelinePort(eth)._2.head
+
+  protected def ethFrame(bs: ByteString): Ethernet[T]
+
 
   override def preStart() {
     val errbuff = new java.lang.StringBuilder("")
@@ -62,18 +80,92 @@ final class EthernetTransporter(val device: String, val dst: MAC)
     src.octet0, src.octet1, src.octet2, src.octet3, src.octet4, src.octet5).
     toArray
   
-  protected def sendBuffer(buffer: TypedBuffer[_]) = {
-    buffer.byteBuffer.rewind
-    buffer.byteBuffer.put(macs)
-    pcap.sendPacket(buffer) == 0
+  protected def send(bs: ByteString) = {
+    pcap.sendPacket(toBinary(ethFrame(bs))) == 0
   }
 
   override def toString = s"EthernetTransporter($device)"
 }
 
+object RawEthernetContext extends EthernetContext {
+  def withEthCRC(bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
+    bs
+}
+
+class RawEthernetTransporter(device: String, dst: MAC)
+    extends EthernetTransporter[RawEthernetContext.type,Raw8023Frame](
+  device, dst) {
+
+  object Raw8023FrameStage extends Raw8023FrameStage[RawEthernetContext.type]
+
+  protected val pipelineStage = new EthernetStage(Raw8023FrameStage)
+
+  protected val pipelineContext = RawEthernetContext
+
+  protected def ethFrame(bs: ByteString) =
+    Ethernet(dst, src, Raw8023Frame(bs))
+
+  override def toString = s"RawEthernetTransporter($device)"
+}
+
+object UdpEthernetContext extends EthernetContext with Ip4Context with UdpContext {
+
+  def withEthCRC(bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
+    bs
+
+  def ttl: Byte = 2
+
+  def withIp4Checksum(packet: ByteString)(
+    implicit byteOrder: ByteOrder): ByteString = packet
+
+  def withUdpChecksum(
+    source: Inet4Address,
+    destination: Inet4Address,
+    protocol: Byte,
+    bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
+    bs
+}
+
+class UdpEthernetTransporter(device: String, dst: MAC, dstSock: InetSocketAddress)
+    extends EthernetTransporter[UdpEthernetContext.type,Ip4Frame[UdpFrame]](
+  device, dst) {
+
+  object UdpFrameStage extends UdpFrameStage[UdpEthernetContext.type]
+
+  object Ip4UdpFrameStage extends Ip4FrameStage(UdpFrameStage)
+
+  protected val pipelineStage = new EthernetStage(Ip4UdpFrameStage)
+
+  protected val pipelineContext = UdpEthernetContext
+
+  protected val srcSock = InetSocketAddress.createUnresolved("0.0.0.0", 0)
+  protected val srcIP = srcSock.getAddress.asInstanceOf[Inet4Address]
+  protected val dstIP = dstSock.getAddress.asInstanceOf[Inet4Address]
+
+  protected def ethFrame(bs: ByteString) =
+    Ethernet(dst, src, Ip4Frame(srcIP, dstIP, UdpFrame(srcSock, dstSock, bs)))
+
+  override def toString = s"RawEthernetTransporter($device)"
+}
+
 object EthernetTransporter {
-  def props(device: String, dst: MAC): Props =
-    Props(classOf[EthernetTransporter], device, dst)
+
+  object Framing extends Enumeration {
+    type Framing = Value
+    val Raw, UDP = Value
+  }
+  
+  def props(
+    device: String,
+    sockaddr: Option[InetSocketAddress],
+    mac: MAC,
+    framing: Framing.Framing): Props =
+    framing match {
+      case Framing.Raw =>
+        Props(classOf[RawEthernetTransporter], device, mac)
+      case Framing.UDP =>
+        Props(classOf[UdpEthernetTransporter], device, mac, sockaddr.get)
+    }
 }
 
 final class UdpTransporter(val dst: InetSocketAddress)
@@ -98,10 +190,9 @@ final class UdpTransporter(val dst: InetSocketAddress)
     channel foreach (_.disconnect())
   }
 
-  protected def sendBuffer(buffer: TypedBuffer[_]) = {
+  protected def send(byteString: ByteString) = {
     (channel.map { ch =>
-      val b = buffer.byteBuffer
-      b.rewind
+      val b = byteString.compact.asByteBuffer
       ch.write(b) == b.limit
     }).getOrElse(false)
   }

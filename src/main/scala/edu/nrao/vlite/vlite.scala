@@ -1,5 +1,7 @@
 package edu.nrao.vlite
 
+import akka.util.ByteString
+import akka.io.{ SymmetricPipelineStage, SymmetricPipePair, PipelineContext }
 import java.nio.ByteOrder.LITTLE_ENDIAN
 
 final class VLITEHeader(
@@ -10,7 +12,7 @@ final class VLITEHeader(
   val threadID: Int,
   val stationID: Int,
   val lengthBy8: Int = 0
-) extends Frame[VLITEHeader] {
+) {
   def isLegacyMode = VLITEHeader.isLegacyMode
   def version = VLITEHeader.version
   def isComplexData = VLITEHeader.isComplexData
@@ -92,139 +94,131 @@ object VLITEHeader {
   val extendedUserData1: Int = 0
   val extendedUserData2: Int = 0
   val extendedUserData3: Int = 0
+}
 
-  implicit object Builder extends FrameBuilder[VLITEHeader] {
-    val frameSize: Short = 32
+trait VLITEConfig extends PipelineContext {
+  def dataArraySize: Int
+  def initDataArray: Seq[Byte]
 
-    private def shiftMaskOr(acc: Int, v: Int, nbits: Int) =
-      (acc << nbits) | (v & ((1 << nbits) - 1))
+  val samplesPerSec = 128 * 1000000
 
-    def apply(hdr: VLITEHeader, buffer: TypedBuffer[VLITEHeader]) = {
-      val word0 =
-        shiftMaskOr(
-          shiftMaskOr(
-            if (hdr.isInvalidData) 1 else 0,
-            if (hdr.isLegacyMode) 1 else 0,
-            1),
-          hdr.secFromRefEpoch,
-          30)
-      val word1 =
-        shiftMaskOr(
-          shiftMaskOr(
-            0, // 2bits
-            hdr.refEpoch,
-            6),
-          hdr.numberWithinSec,
-          24)
-      val word2 =
-        shiftMaskOr(
-          shiftMaskOr(
-            hdr.version, // 3 bits
-            hdr.log2NumChannels,
-            5),
-          hdr.lengthBy8,
-          24)
-      val word3 =
-        shiftMaskOr(
-          shiftMaskOr(
+  val samplesPerFrame = dataArraySize / ((VLITEHeader.bitsPerSampleLess1 + 1) / 8)
+
+  val framesPerSec = samplesPerSec / samplesPerFrame
+
+  val framesPerMs = framesPerSec / 1000.0
+}
+
+object VLITEStage
+    extends SymmetricPipelineStage[VLITEConfig, VLITEHeader, ByteString] {
+
+  override def apply(ctx: VLITEConfig) =
+    new SymmetricPipePair[VLITEHeader, ByteString] {
+
+      implicit val byteOrder = LITTLE_ENDIAN
+
+      var buffer: Option[ByteString] = None
+
+      val frameSize = ctx.dataArraySize + 32
+
+      val lengthBy8 = frameSize / 8
+
+      private def shiftMaskOr(acc: Int, v: Int, nbits: Int) =
+        (acc << nbits) | (v & ((1 << nbits) - 1))
+
+      def commandPipeline = { hdr: VLITEHeader =>
+        val bb = ByteString.newBuilder.
+          putInt(
             shiftMaskOr(
-              if (hdr.isComplexData) 1 else 0,
-              hdr.bitsPerSampleLess1,
-              5),
-            hdr.threadID,
-            10),
-          hdr.stationID,
-          16)
-      val word4 =
-        shiftMaskOr(
-          hdr.extendedDataVersion,
-          hdr.extendedUserData0,
-          24)
-      val b = buffer.byteBuffer
-      b.order(LITTLE_ENDIAN)
-      b.putInt(word0).
-        putInt(word1).
-        putInt(word2).
-        putInt(word3).
-        putInt(word4).
-        putInt(hdr.extendedUserData1).
-        putInt(hdr.extendedUserData2).
-        putInt(hdr.extendedUserData3)
+              shiftMaskOr(
+                if (hdr.isInvalidData) 1 else 0,
+                if (hdr.isLegacyMode) 1 else 0,
+                1),
+              hdr.secFromRefEpoch,
+              30)).
+          putInt(
+            shiftMaskOr(
+              shiftMaskOr(
+                0, // 2bits
+                hdr.refEpoch,
+                6),
+              hdr.numberWithinSec,
+              24)).
+          putInt(
+            shiftMaskOr(
+              shiftMaskOr(
+                hdr.version, // 3 bits
+                hdr.log2NumChannels,
+                5),
+              lengthBy8,
+              24)).
+          putInt(
+            shiftMaskOr(
+              shiftMaskOr(
+                shiftMaskOr(
+                  if (hdr.isComplexData) 1 else 0,
+                  hdr.bitsPerSampleLess1,
+                  5),
+                hdr.threadID,
+                10),
+              hdr.stationID,
+              16)).
+          putInt(
+            shiftMaskOr(
+              hdr.extendedDataVersion,
+              hdr.extendedUserData0,
+              24)).
+          putInt(hdr.extendedUserData1).
+          putInt(hdr.extendedUserData2).
+          putInt(hdr.extendedUserData3)
+        bb ++= ctx.initDataArray
+        ctx.singleCommand(bb.result)
+      }
+
+      protected def extractOne(bs: ByteString): VLITEHeader = {
+        val iter = bs.iterator
+        val word0 = iter.getInt
+        val word1 = iter.getInt
+        val word2 = iter.getInt
+        val word3 = iter.getInt
+        val word4 = iter.getInt
+        val extendedUserData1 = iter.getInt
+        val extendedUserData2 = iter.getInt
+        val extendedUserData3 = iter.getInt
+        val hdrLengthBy8 = word2 & ((1 << 24) - 1)
+        assert(hdrLengthBy8 == lengthBy8)
+        VLITEHeader(
+          isInvalidData = (word0 & (1 << 31)) != 0,
+          secFromRefEpoch = word0 & ((1 << 30) - 1),
+          refEpoch = (word1 >> 24) & ((1 << 6) - 1),
+          numberWithinSec = word1 & ((1 << 24) - 1),
+          lengthBy8 = hdrLengthBy8,
+          threadID = (word3 >> 16) & ((1 << 10) - 1),
+          stationID = word3 & ((1 << 16) - 1))
+      }
+
+      protected def extractFrameHeaders(bs: ByteString, acc: List[VLITEHeader]):
+          (Option[ByteString], List[VLITEHeader]) = {
+        if (bs.isEmpty)
+          (None, acc)
+        else if (bs.length < frameSize)
+          (Some(bs.compact), acc)
+        else
+          bs.splitAt(frameSize) match {
+            case (first, rest) =>
+              extractFrameHeaders(rest, extractOne(first) :: acc)
+          }
+      }
+
+      def eventPipeline = { bs: ByteString =>
+        val data = if (buffer.isEmpty) bs else buffer.get ++ bs
+        val (nb, headers) = extractFrameHeaders(data, Nil)
+        buffer = nb
+        headers match {
+          case Nil        => Nil
+          case one :: Nil => ctx.singleEvent(one)
+          case many       => many reverseMap (Left(_))
+        }
+      }
     }
-  }
-
-  implicit object Reader extends FrameReader[VLITEHeader] {
-    def apply(buffer: TypedBuffer[VLITEHeader]) = {
-      val b = buffer.byteBuffer
-      b.order(LITTLE_ENDIAN)
-      val word0 = b.getInt()
-      val word1 = b.getInt()
-      val word2 = b.getInt()
-      val word3 = b.getInt()
-      val word4 = b.getInt()
-      val extendedUserData1 = b.getInt()
-      val extendedUserData2 = b.getInt()
-      val extendedUserData3 = b.getInt()
-      VLITEHeader(
-        isInvalidData = (word0 & (1 << 31)) != 0,
-        secFromRefEpoch = word0 & ((1 << 30) - 1),
-        refEpoch = (word1 >> 24) & ((1 << 6) - 1),
-        numberWithinSec = word1 & ((1 << 24) - 1),
-        lengthBy8 = word2 & ((1 << 24) - 1),
-        threadID = (word3 >> 16) & ((1 << 10) - 1),
-        stationID = word3 & ((1 << 16) - 1))
-    }
-  }
-}
-
-final class VLITEFrame(val header: VLITEHeader) extends Frame[VLITEFrame] {
-  override def toString = s"VLITEFrame($header)"
-
-  override def equals(other: Any): Boolean = other match {
-    case that: VLITEFrame => that.header == header
-    case _ => false
-  }
-
-  override def hashCode: Int = header.hashCode
-}
-
-object VLITEFrame {
-  def apply(hdr: VLITEHeader): VLITEFrame =
-    new VLITEFrame(
-      VLITEHeader(
-        isInvalidData = hdr.isInvalidData,
-        secFromRefEpoch = hdr.secFromRefEpoch,
-        refEpoch = hdr.refEpoch,
-        numberWithinSec = hdr.numberWithinSec,
-        threadID = hdr.threadID,
-        stationID = hdr.stationID,
-        lengthBy8 = Builder.frameSize / 8))
-
-  def unapply(frame: VLITEFrame) = Some((frame.header))
-
-  val dataArraySize = 5000
-
-  implicit object Builder extends FrameBuilder[VLITEFrame] {
-
-    val frameSize = (dataArraySize + VLITEHeader.Builder.frameSize).toShort
-
-    def apply(frame: VLITEFrame, buffer: TypedBuffer[VLITEFrame]) = {
-      buffer.slice[VLITEHeader].write(frame.header)
-      val b = buffer.byteBuffer
-      b.position(b.position + dataArraySize)
-    }
-  }
-
-  implicit object Reader extends FrameReader[VLITEFrame] {
-    def apply(buffer: TypedBuffer[VLITEFrame]) = {
-      val header = buffer.slice[VLITEHeader].read
-      val b = buffer.byteBuffer
-      b.position(b.position + dataArraySize)
-      VLITEFrame(header)
-    }
-  }
-
-  implicit object EthernetBuilder extends Ethernet.Builder[VLITEFrame]
-
-  implicit object EthernetReader extends Ethernet.Reader[VLITEFrame]
 }

@@ -13,8 +13,9 @@ case class EmulatorInstance(
   decimation: Int,
   pace: FiniteDuration,
   transport: Emulator.Transport.Transport,
+  framing: Option[EthernetTransporter.Framing.Framing],
   device: Option[String],
-  destination: String)
+  destination: (String, String))
 
 class SettingsImpl(config: Config) extends Extension {
   import scala.collection.JavaConversions._
@@ -32,18 +33,25 @@ class SettingsImpl(config: Config) extends Extension {
             throw new ConfigException.BadValue(
               s"emulators.instances($index).transport",
               "value must be either 'ethernet' or 'udp'")
-        val (device, destination) = transport match {
+        def destinationSock = {
+          val hostname =
+            instanceConf.getString("destination.udp.hostname")
+          val port = instanceConf.getInt("destination.udp.port")
+          s"$hostname:$port"
+        }
+        val (device, destination, framing) = transport match {
           case Emulator.Transport.Ethernet =>
+            val (sock, framing) = instanceConf.getString("vdif-framing") match {
+              case "raw" =>
+                ("", EthernetTransporter.Framing.Raw)
+              case "udp" =>
+                (destinationSock, EthernetTransporter.Framing.UDP)
+            }
             (Some(instanceConf.getString("device")),
-              instanceConf.getString("destination.ethernet"))
+              (sock, instanceConf.getString("destination.ethernet")),
+              Some(framing))
           case Emulator.Transport.UDP =>
-            (None,
-              {
-                val hostname =
-                  instanceConf.getString("destination.udp.hostname")
-                val port = instanceConf.getInt("destination.udp.port")
-                s"$hostname:$port"
-              })
+            (None, (destinationSock, ""), None)
         }
         EmulatorInstance(
           hostname = instanceConf.getString("hostname"),
@@ -55,6 +63,7 @@ class SettingsImpl(config: Config) extends Extension {
           decimation = instanceConf.getInt("decimation"),
           pace = instanceConf.getDuration("pace", MILLISECONDS).millis,
           transport = transport,
+          framing = framing,
           device = device,
           destination = destination)
       }

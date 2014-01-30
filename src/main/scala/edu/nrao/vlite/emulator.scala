@@ -5,12 +5,14 @@ import akka.util.Timeout
 import akka.pattern.{ ask, pipe }
 import scala.concurrent.duration._
 import scala.collection.mutable
+import scala.util.Try
 import java.net.InetSocketAddress
 
 final class Emulator(
   val transport: Emulator.Transport.Transport,
+  val framing: Option[EthernetTransporter.Framing.Framing],
   val device: Option[String],
-  val destination: String,
+  val destination: (String, String),
   val sourceIDs: Seq[(Int, Int)],
   val pace: FiniteDuration = Emulator.defaultPace,
   val decimation: Int = Emulator.defaultDecimation)
@@ -18,18 +20,23 @@ final class Emulator(
 
   import context._
 
-  val transporter = transport match {
-    case Emulator.Transport.Ethernet =>
-      actorOf(
-        EthernetTransporter.props(device.get, MAC(destination)),
-        "transporter")
-    case Emulator.Transport.UDP => {
-      val hostAndPort = destination.split(':')
-      val hostname = hostAndPort(0)
-      val port = hostAndPort(1).toInt
-      actorOf(
-        UdpTransporter.props(new InetSocketAddress(hostname, port)),
-        "transporter")
+  val transporter = {
+    val sockaddr =
+      (Try {
+        val hostAndPort = destination._1.split(':')
+        val hostname = hostAndPort(0)
+        val port = hostAndPort(1).toInt
+        new InetSocketAddress(hostname, port)
+      }).toOption
+    transport match {
+      case Emulator.Transport.Ethernet =>
+        actorOf(
+          EthernetTransporter.props(
+            device.get, sockaddr, MAC(destination._2), framing.get),
+          "transporter")
+      case Emulator.Transport.UDP => {
+        actorOf(UdpTransporter.props(sockaddr.get), "transporter")
+      }
     }
   }
 
@@ -109,14 +116,16 @@ final class Emulator(
 object Emulator {
   def props(
     transport: Transport.Transport,
+    framing: Option[EthernetTransporter.Framing.Framing],
     device: Option[String],
-    destination: String,
+    destination: (String, String),
     sourceIDs: Seq[(Int, Int)],
     pace: FiniteDuration = defaultPace,
     decimation: Int = defaultDecimation): Props =
     Props(
       classOf[Emulator],
       transport,
+      framing,
       device,
       destination,
       sourceIDs,

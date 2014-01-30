@@ -3,6 +3,8 @@ package edu.nrao.vlite
 import scala.concurrent.duration._
 import org.joda.time.{ DateTime, DateTimeZone, Duration => JodaDuration }
 import akka.actor._
+import akka.io.{ PipelineFactory, PipelinePorts }
+import akka.util.ByteString
 
 final class Generator(
   val threadID: Int,
@@ -13,10 +15,15 @@ final class Generator(
 
   import context._
 
+  implicit object VLITEConfig extends VLITEConfig {
+    val dataArraySize = 5000 // TODO: obtain value from settings
+    lazy val initDataArray = Seq.fill[Byte](dataArraySize)(0)
+  }
+
   override def preStart() {
     require(
-      1 <= decimation && decimation <= Generator.framesPerSec,
-      s"Invalid frame rate decimation factor: must be between 1 and ${Generator.framesPerSec}"
+      1 <= decimation && decimation <= VLITEConfig.framesPerSec,
+      s"Invalid frame rate decimation factor: must be between 1 and ${VLITEConfig.framesPerSec}"
     )
   }
 
@@ -24,26 +31,26 @@ final class Generator(
   protected var numberWithinSec: Int = 0
   protected var stream: Option[Cancellable] = None
 
-  val framesPerSec = Generator.framesPerSec / decimation
+  val framesPerSec = VLITEConfig.framesPerSec / decimation
   // TODO: make durationPerFrame a sequence for dithering error from using
   // integer division? Probably not worth it given the accuracy of the
   // scheduler.
   val durationPerFrame = (1000000000L / framesPerSec).nanos
 
-  protected def nextFrame: Ethernet[VLITEFrame] = {
-    val dummyMAC = MAC(0,0,0,0,0,0)
-    val eth = Ethernet(
-      dummyMAC,
-      dummyMAC,
-      VLITEFrame(VLITEHeader(
-        isInvalidData = false,
-        secFromRefEpoch = secFromRefEpoch,
-        refEpoch = Generator.refEpoch,
-        numberWithinSec = numberWithinSec,
-        threadID = threadID,
-        stationID = stationID)))
+  val PipelinePorts(vlitePipeline, _, _) =
+    PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
+
+  protected def nextFrame: ByteString = {
+    val header = VLITEHeader(
+      isInvalidData = false,
+      secFromRefEpoch = secFromRefEpoch,
+      refEpoch = Generator.refEpoch,
+      numberWithinSec = numberWithinSec,
+      threadID = threadID,
+      stationID = stationID)
     incNumberWithinSec()
-    eth
+    val (_, result) = vlitePipeline(header)
+    result.head
   }
 
   protected def incNumberWithinSec() {
@@ -90,7 +97,7 @@ final class Generator(
       val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
         (decCount - numberWithinSec))
       for (i <- 0 until numFrames)
-        transporter ! Transporter.Transport(nextFrame.frame)
+        transporter ! Transporter.Transport(nextFrame)
     }
     case Generator.GetLatency =>
       sender ! Generator.Latency(
@@ -113,15 +120,6 @@ object Generator {
       pace,
       decimation)
 
-  val samplesPerSec = 128 * 1000000
-
-  val samplesPerFrame =
-    VLITEFrame.dataArraySize / ((VLITEHeader.bitsPerSampleLess1 + 1) / 8)
-
-  val framesPerSec = samplesPerSec / samplesPerFrame
-
-  private val framesPerMs = framesPerSec / 1000.0
-
   val referenceEpoch = {
     val now = DateTime.now(DateTimeZone.UTC)
     val halfYearMonth = (((now.getMonthOfYear - 1) / 6) * 6) + 1
@@ -132,17 +130,19 @@ object Generator {
     (2 * (referenceEpoch.getYear - 2000) +
       ((referenceEpoch.getMonthOfYear - 1) / 6))
 
-  def timeFromRefEpoch: (Int, Int) = {
+  def timeFromRefEpoch(implicit config: VLITEConfig): (Int, Int) = {
     val diff =
       new JodaDuration(referenceEpoch, DateTime.now(DateTimeZone.UTC))
     val sec = diff.toStandardSeconds
     val frac = diff.minus(sec.toStandardDuration)
-    (sec.getSeconds, (frac.getMillis * framesPerMs).floor.toInt)
+    (sec.getSeconds, (frac.getMillis * config.framesPerMs).floor.toInt)
   }
 
-  def secondsFromRefEpoch: Int = timeFromRefEpoch._1
+  def secondsFromRefEpoch(implicit config: VLITEConfig): Int =
+    timeFromRefEpoch(config)._1
 
-  def framesFromRefEpoch: Int = timeFromRefEpoch._2
+  def framesFromRefEpoch(implicit config: VLITEConfig): Int =
+    timeFromRefEpoch(config)._2
 
   case object GenFrames
   case object GetLatency

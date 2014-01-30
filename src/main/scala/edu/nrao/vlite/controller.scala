@@ -3,7 +3,6 @@ package edu.nrao.vlite
 import akka.actor._
 import akka.remote.RemoteScope
 import scala.concurrent.duration._
-import scala.util.{ Try, Success, Failure }
 
 class Controller extends Actor with ActorLogging {
   import context._
@@ -16,6 +15,7 @@ class Controller extends Actor with ActorLogging {
       device = instance.device,
       destination = instance.destination,
       transport = instance.transport,
+      framing = instance.framing,
       sourceIDs = instance.threadIDs map (tid => (instance.stationID, tid)),
       pace = instance.pace,
       decimation = instance.decimation).

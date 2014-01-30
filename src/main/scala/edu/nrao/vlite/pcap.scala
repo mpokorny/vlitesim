@@ -2,26 +2,17 @@ package edu.nrao.vlite
 
 import scala.collection.JavaConversions._
 import org.jnetpcap.{ Pcap, PcapIf }
+import akka.util.ByteString
 
 package object pcap {
   implicit class PcapOps(pcap: Pcap) {
-    def inject[_](buffer: TypedBuffer[_]): Int = {
-      buffer.byteBuffer.rewind
-      pcap.inject(buffer.byteBuffer)
+    def inject[_](byteString: ByteString): Int = {
+      pcap.inject(byteString.compact.asByteBuffer)
     }
 
-    def inject[T <: Frame[T]](eth: Ethernet[T])(
-      implicit reader: FrameReader[Ethernet[T]],
-      builder: FrameBuilder[Ethernet[T]]): Int = inject(eth.frame)
-
-    def sendPacket[_](buffer: TypedBuffer[_]): Int = {
-      buffer.byteBuffer.rewind
-      pcap.sendPacket(buffer.byteBuffer)
+    def sendPacket[_](byteString: ByteString): Int = {
+      pcap.sendPacket(byteString.compact.asByteBuffer)
     }
-
-    def sendPacket[T <: Frame[T]](eth: Ethernet[T])(
-      implicit reader: FrameReader[Ethernet[T]],
-      builder: FrameBuilder[Ethernet[T]]): Int = sendPacket(eth.frame)
   }
 
   def getMAC(ifname: String): Option[MAC] = {
