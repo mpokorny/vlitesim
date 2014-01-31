@@ -6,7 +6,7 @@ import com.typesafe.config.ConfigFactory
 
 class Simulator extends Bootable {
 
-  val version = "akkabin"
+  val version = "20140131.0"
 
   val system = ActorSystem("vlite", ConfigFactory.load.getConfig("vlite"))
 
