@@ -32,7 +32,7 @@ trait Transporter extends Actor with ActorLogging {
   protected def send(byteString: ByteString): Boolean
 }
 
-abstract class EthernetTransporter[C <: EthernetContext, T <: HasEtherCode](
+abstract class EthernetTransporter[T <: HasEtherCode](
   val device: String,
   val dst: MAC)
     extends Transporter {
@@ -41,15 +41,17 @@ abstract class EthernetTransporter[C <: EthernetContext, T <: HasEtherCode](
   import EthernetTransporter._
   import org.jnetpcap.Pcap
 
+  type PC <: EthernetContext
+
   protected var pcap: Pcap = null
 
   protected var src: MAC = null
 
-  protected val pipelineStage: EthernetStage[C, T]
+  protected val pipelineStage: EthernetStage[PC, T]
 
-  protected val pipelineContext: C
+  protected val pipelineContext: PC
 
-  private val PipelinePorts(pipelinePort, _, _) =
+  private lazy val PipelinePorts(pipelinePort, _, _) =
     PipelineFactory.buildFunctionTriple(pipelineContext, pipelineStage)
 
   private def toBinary(eth: Ethernet[T]): ByteString =
@@ -93,10 +95,11 @@ object RawEthernetContext extends EthernetContext {
 }
 
 class RawEthernetTransporter(device: String, dst: MAC)
-    extends EthernetTransporter[RawEthernetContext.type,Raw8023Frame](
-  device, dst) {
+    extends EthernetTransporter[Raw8023Frame](device, dst) {
 
-  object Raw8023FrameStage extends Raw8023FrameStage[RawEthernetContext.type]
+  type PC = RawEthernetContext.type
+
+  object Raw8023FrameStage extends Raw8023FrameStage[PC]
 
   protected val pipelineStage = new EthernetStage(Raw8023FrameStage)
 
@@ -108,7 +111,8 @@ class RawEthernetTransporter(device: String, dst: MAC)
   override def toString = s"RawEthernetTransporter($device)"
 }
 
-object UdpEthernetContext extends EthernetContext with Ip4Context with UdpContext {
+object UdpEthernetContext
+    extends EthernetContext with Ip4Context with UdpContext {
 
   def withEthCRC(bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
     bs
@@ -127,10 +131,11 @@ object UdpEthernetContext extends EthernetContext with Ip4Context with UdpContex
 }
 
 class UdpEthernetTransporter(device: String, dst: MAC, dstSock: InetSocketAddress)
-    extends EthernetTransporter[UdpEthernetContext.type,Ip4Frame[UdpFrame]](
-  device, dst) {
+    extends EthernetTransporter[Ip4Frame[UdpFrame]](device, dst) {
 
-  object UdpFrameStage extends UdpFrameStage[UdpEthernetContext.type]
+  type PC = UdpEthernetContext.type
+
+  object UdpFrameStage extends UdpFrameStage[PC]
 
   object Ip4UdpFrameStage extends Ip4FrameStage(UdpFrameStage)
 
@@ -138,7 +143,7 @@ class UdpEthernetTransporter(device: String, dst: MAC, dstSock: InetSocketAddres
 
   protected val pipelineContext = UdpEthernetContext
 
-  protected val srcSock = InetSocketAddress.createUnresolved("0.0.0.0", 0)
+  protected val srcSock = new InetSocketAddress(0)
   protected val srcIP = srcSock.getAddress.asInstanceOf[Inet4Address]
   protected val dstIP = dstSock.getAddress.asInstanceOf[Inet4Address]
 
