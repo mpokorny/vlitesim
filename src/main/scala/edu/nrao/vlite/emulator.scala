@@ -12,6 +12,7 @@ final class Emulator(
   val transport: Emulator.Transport.Transport,
   val framing: Option[EthernetTransporter.Framing.Framing],
   val device: Option[String],
+  val hostname: String,
   val destination: (String, String),
   val sourceIDs: Seq[(Int, Int)],
   val pace: FiniteDuration = Emulator.defaultPace,
@@ -22,7 +23,7 @@ final class Emulator(
   import context._
 
   val transporter = {
-    val sockaddr =
+    val dstSock =
       (Try {
         val hostAndPort = destination._1.split(':')
         val hostname = hostAndPort(0)
@@ -30,13 +31,15 @@ final class Emulator(
         new InetSocketAddress(hostname, port)
       }).toOption
     transport match {
-      case Emulator.Transport.Ethernet =>
+      case Emulator.Transport.Ethernet => {
+        val srcSock = Some(new InetSocketAddress(hostname, 5555))
         actorOf(
           EthernetTransporter.props(
-            device.get, sockaddr, MAC(destination._2), framing.get),
+            device.get, MAC(destination._2), dstSock, srcSock, framing.get),
           "transporter")
+      }
       case Emulator.Transport.UDP => {
-        actorOf(UdpTransporter.props(sockaddr.get), "transporter")
+        actorOf(UdpTransporter.props(dstSock.get), "transporter")
       }
     }
   }
@@ -120,6 +123,7 @@ object Emulator {
     transport: Transport.Transport,
     framing: Option[EthernetTransporter.Framing.Framing],
     device: Option[String],
+    hostname: String,
     destination: (String, String),
     sourceIDs: Seq[(Int, Int)],
     pace: FiniteDuration = defaultPace,
@@ -130,6 +134,7 @@ object Emulator {
       transport,
       framing,
       device,
+      hostname,
       destination,
       sourceIDs,
       pace,

@@ -14,6 +14,7 @@ class Controller extends Actor with ActorLogging {
     actorOf(Emulator.props(
       device = instance.device,
       destination = instance.destination,
+      hostname = instance.hostname,
       transport = instance.transport,
       framing = instance.framing,
       sourceIDs = instance.threadIDs map (tid => (instance.stationID, tid)),

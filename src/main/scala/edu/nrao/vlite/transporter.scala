@@ -59,7 +59,6 @@ abstract class EthernetTransporter[T <: HasEtherCode](
 
   protected def ethFrame(bs: ByteString): Ethernet[T]
 
-
   override def preStart() {
     val errbuff = new java.lang.StringBuilder("")
     pcap =
@@ -82,9 +81,8 @@ abstract class EthernetTransporter[T <: HasEtherCode](
     src.octet0, src.octet1, src.octet2, src.octet3, src.octet4, src.octet5).
     toArray
   
-  protected def send(bs: ByteString) = {
+  protected def send(bs: ByteString) =
     pcap.sendPacket(toBinary(ethFrame(bs))) == 0
-  }
 
   override def toString = s"EthernetTransporter($device)"
 }
@@ -117,20 +115,61 @@ object UdpEthernetContext
   def withEthCRC(bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
     bs
 
-  def ttl: Byte = 2
+  def ttl: Byte = 8
 
   def withIp4Checksum(packet: ByteString)(
-    implicit byteOrder: ByteOrder): ByteString = packet
+    implicit byteOrder: ByteOrder): ByteString = {
+    var sum = 0L
+    val iter = packet.slice(0, 20).iterator
+    while (iter.hasNext) { sum += iter.getLongPart(2) }
+    val sum1 = (sum & 0xFFFF) + ((sum >> 16) & 0xFFFF)
+    val checksum = {
+      val sum2 = (sum1 & 0xFFFF) + ((sum1 >> 16) & 0xFFFF)
+      ByteString.newBuilder.putLongPart(~sum2, 2).result
+    }
+    packet.slice(0, 10) ++ checksum ++ packet.slice(12, packet.length)
+  }
 
   def withUdpChecksum(
     source: Inet4Address,
     destination: Inet4Address,
     protocol: Byte,
-    bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
-    bs
+    bs: ByteString)(implicit byteOrder: ByteOrder): ByteString = {
+
+    def addressSum(addr: Inet4Address): Long = {
+      val iter = ByteString(addr.getAddress).iterator
+      iter.getLongPart(2) + iter.getLongPart(2)
+    }
+    val udpHeaderSum: Long = {
+      val iter = bs.slice(0, 6).iterator
+      var result = 0L
+      while (iter.hasNext) { result += iter.getLongPart(2) }
+      result
+    }
+    val pseudoHeaderSum = (addressSum(source) + addressSum(destination) +
+      ByteString(Array[Byte](0, protocol)).iterator.getShort.toLong +
+      bs.length + udpHeaderSum)
+    val payloadSum = {
+      val payload = bs.slice(8, bs.length).iterator
+      var result = 0L
+      while (payload.hasNext) { result += payload.getLongPart(2) }
+      result
+    }
+    val sum = pseudoHeaderSum + payloadSum
+    val sum1 = (sum & 0xFFFF) + ((sum >> 16) & 0xFFFF)
+    val checksum = {
+      val sum2 = ~((sum1 & 0xFFFF) + ((sum1 >> 16) & 0xFFFF))
+      ByteString.newBuilder.putLongPart(if (sum2 != 0) sum2 else ~sum2, 2).result
+    }
+    bs.slice(0, 6) ++ checksum ++ bs.slice(8, bs.length)
+  }
 }
 
-class UdpEthernetTransporter(device: String, dst: MAC, dstSock: InetSocketAddress)
+class UdpEthernetTransporter(
+  device: String,
+  dst: MAC,
+  dstSock: InetSocketAddress,
+  srcSock: InetSocketAddress)
     extends EthernetTransporter[Ip4Frame[UdpFrame]](device, dst) {
 
   type PC = UdpEthernetContext.type
@@ -143,7 +182,6 @@ class UdpEthernetTransporter(device: String, dst: MAC, dstSock: InetSocketAddres
 
   protected val pipelineContext = UdpEthernetContext
 
-  protected val srcSock = new InetSocketAddress(0)
   protected val srcIP = srcSock.getAddress.asInstanceOf[Inet4Address]
   protected val dstIP = dstSock.getAddress.asInstanceOf[Inet4Address]
 
@@ -162,14 +200,15 @@ object EthernetTransporter {
   
   def props(
     device: String,
-    sockaddr: Option[InetSocketAddress],
     mac: MAC,
+    dstSock: Option[InetSocketAddress],
+    srcSock: Option[InetSocketAddress],
     framing: Framing.Framing): Props =
     framing match {
       case Framing.Raw =>
         Props(classOf[RawEthernetTransporter], device, mac)
       case Framing.UDP =>
-        Props(classOf[UdpEthernetTransporter], device, mac, sockaddr.get)
+        Props(classOf[UdpEthernetTransporter], device, mac, dstSock.get, srcSock.get)
     }
 }
 
