@@ -11,12 +11,13 @@ final class Generator(
   val stationID: Int,
   val transporter: ActorRef,
   val pace: FiniteDuration,
-  decimation: Int = 1) extends Actor with ActorLogging {
+  decimation: Int = 1,
+  vdifArraySize: Int = 5000) extends Actor with ActorLogging {
 
   import context._
 
   implicit object VLITEConfig extends VLITEConfig {
-    val dataArraySize = 5000 // TODO: obtain value from settings
+    val dataArraySize = vdifArraySize
     lazy val initDataArray = Seq.fill[Byte](dataArraySize)(0)
   }
 
@@ -111,14 +112,16 @@ object Generator {
     stationID: Int,
     transporter: ActorRef,
     pace: FiniteDuration = 1.millis,
-    decimation: Int = 1): Props =
+    decimation: Int = 1,
+    vdifArraySize: Int = 5000): Props =
     Props(
       classOf[Generator],
       threadID,
       stationID,
       transporter,
       pace,
-      decimation)
+      decimation,
+      vdifArraySize)
 
   val referenceEpoch = {
     val now = DateTime.now(DateTimeZone.UTC)

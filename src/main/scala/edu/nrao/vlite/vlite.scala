@@ -102,11 +102,12 @@ trait VLITEConfig extends PipelineContext {
 
   val samplesPerSec = 128 * 1000000
 
-  val samplesPerFrame = dataArraySize / ((VLITEHeader.bitsPerSampleLess1 + 1) / 8)
+  lazy val samplesPerFrame =
+    dataArraySize / ((VLITEHeader.bitsPerSampleLess1 + 1) / 8)
 
-  val framesPerSec = samplesPerSec / samplesPerFrame
+  lazy val framesPerSec = samplesPerSec / samplesPerFrame
 
-  val framesPerMs = framesPerSec / 1000.0
+  lazy val framesPerMs = framesPerSec / 1000.0
 }
 
 object VLITEStage

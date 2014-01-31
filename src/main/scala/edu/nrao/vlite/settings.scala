@@ -83,6 +83,8 @@ class SettingsImpl(config: Config) extends Extension {
 
   def remotePath(host: String, name: String): String =
     "akka." + remoteAddress(host).toString + s"/user/$name"
+
+  val vdifArraySize = config.getInt("vdif.array-size")
 }
 
 object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {
