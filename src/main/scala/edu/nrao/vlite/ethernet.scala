@@ -296,6 +296,7 @@ class UdpFrameStage[C <: UdpContext] extends PipelineStage[
           putShort(dstPort).
           putShort(frame.payload.length + 8).
           putShort(0)
+        bb ++= frame.payload
         List(
           Right(ctx.withUdpChecksum(srcIp, dstIp, protocol, bb.result)),
           Left(frame, protocol))
