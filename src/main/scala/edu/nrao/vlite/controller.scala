@@ -9,8 +9,6 @@ class Controller extends Actor with ActorLogging {
 
   val settings = Settings(context.system)
 
-  val vdifArraySize = settings.vdifArraySize
-
   protected def emulatorActor(instance: EmulatorInstance, index: Int):
       ActorRef =
     actorOf(Emulator.props(
@@ -21,7 +19,7 @@ class Controller extends Actor with ActorLogging {
       sourceIDs = instance.threadIDs map (tid => (instance.stationID, tid)),
       pace = instance.pace,
       decimation = instance.decimation,
-      vdifArraySize = vdifArraySize).
+      arraySize = instance.arraySize).
       withDeploy(Deploy(
         scope = RemoteScope(settings.remoteAddress(instance.hostname)))),
       s"emulator${index}")

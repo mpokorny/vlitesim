@@ -16,7 +16,7 @@ final class Emulator(
   val sourceIDs: Seq[(Int, Int)],
   val pace: FiniteDuration = Emulator.defaultPace,
   val decimation: Int = Emulator.defaultDecimation,
-  val vdifArraySize: Int = Emulator.defaultVdifArraySize)
+  val arraySize: Int = Emulator.defaultArraySize)
     extends Actor with ActorLogging {
 
   import context._
@@ -49,7 +49,7 @@ final class Emulator(
         transporter = transporter,
         pace = pace,
         decimation = decimation,
-        vdifArraySize = vdifArraySize))
+        arraySize = arraySize))
   }
 
   protected implicit val queryTimeout = Timeout(1.seconds)
@@ -124,7 +124,7 @@ object Emulator {
     sourceIDs: Seq[(Int, Int)],
     pace: FiniteDuration = defaultPace,
     decimation: Int = defaultDecimation,
-    vdifArraySize: Int = defaultVdifArraySize): Props =
+    arraySize: Int = defaultArraySize): Props =
     Props(
       classOf[Emulator],
       transport,
@@ -134,13 +134,13 @@ object Emulator {
       sourceIDs,
       pace,
       decimation,
-      vdifArraySize)
+      arraySize)
 
   val defaultPace = 1.milli
 
   val defaultDecimation = 1
 
-  val defaultVdifArraySize = 5000
+  val defaultArraySize = 5000
 
   case object GetGeneratorLatencies
   case class Latencies(values: Map[(Int, Int), Int])

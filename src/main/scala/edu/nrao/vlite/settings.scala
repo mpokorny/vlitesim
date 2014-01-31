@@ -10,11 +10,12 @@ case class EmulatorInstance(
   hostname: String,
   stationID: Int,
   threadIDs: List[Int],
-  decimation: Int,
   pace: FiniteDuration,
   transport: Emulator.Transport.Transport,
   framing: Option[EthernetTransporter.Framing.Framing],
   device: Option[String],
+  decimation: Int,
+  arraySize: Int,
   destination: (String, String))
 
 class SettingsImpl(config: Config) extends Extension {
@@ -60,11 +61,12 @@ class SettingsImpl(config: Config) extends Extension {
               case Array(first, second) => (first.toInt << 8) + second.toInt
             },
           threadIDs = instanceConf.getIntList("threadIDs").toList.map(_.toInt),
-          decimation = instanceConf.getInt("decimation"),
           pace = instanceConf.getDuration("pace", MILLISECONDS).millis,
           transport = transport,
           framing = framing,
           device = device,
+          decimation = instanceConf.getInt("decimation"),
+          arraySize = instanceConf.getInt("vdif-data-size"),
           destination = destination)
       }
     }
@@ -83,8 +85,6 @@ class SettingsImpl(config: Config) extends Extension {
 
   def remotePath(host: String, name: String): String =
     "akka." + remoteAddress(host).toString + s"/user/$name"
-
-  val vdifArraySize = config.getInt("vdif.array-size")
 }
 
 object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {

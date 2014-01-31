@@ -319,7 +319,3 @@ class UdpFrameStage[C <: UdpContext] extends PipelineStage[
       }
     }
 }
-
-// object Ip4UdpFrameStage extends Ip4FrameStage(UdpFrameStage)
-
-// object UdpEthernetStage extends EthernetStage(Ip4UdpFrameStage)
