@@ -1,6 +1,6 @@
 package edu.nrao.vlite
 
-import akka.actor.{ Actor, ActorRef, ActorLogging, Props, Terminated }
+import akka.actor.{ Actor, ActorRef, ActorLogging, Props }
 import akka.util.ByteString
 import akka.io._
 import java.net.{ InetAddress, Inet4Address, InetSocketAddress }
@@ -189,7 +189,8 @@ class UdpEthernetTransporter(
   protected def ethFrame(bs: ByteString) =
     Ethernet(dst, src, Ip4Frame(srcIP, dstIP, UdpFrame(srcSock, dstSock, bs)))
 
-  override def toString = s"RawEthernetTransporter($device)"
+  override def toString =
+    s"UdpEthernetTransporter($device,$dst,$dstSock,$srcSock)"
 }
 
 object EthernetTransporter {
