@@ -183,8 +183,6 @@ class Raw8023FrameStage[C <: EthernetContext]
     }
 }
 
-// object Raw8023EthernetStage extends EthernetStage(Raw8023FrameStage)
-
 trait Ip4Context extends PipelineContext {
   def ttl: Byte
   def withIp4Checksum(packet: ByteString)(
