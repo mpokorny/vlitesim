@@ -150,7 +150,8 @@ object UdpEthernetContext
       ByteString(Array[Byte](0, protocol)).iterator.getShort.toLong +
       bs.length + udpHeaderSum)
     val payloadSum = {
-      val payload = bs.slice(8, bs.length).iterator
+      val buff = if (bs.length % 2 == 0) bs else bs ++ ByteString(0)
+      val payload = buff.slice(8, buff.length).iterator
       var result = 0L
       while (payload.hasNext) { result += payload.getLongPart(2) }
       result
