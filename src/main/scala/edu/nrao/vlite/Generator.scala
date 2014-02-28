@@ -123,13 +123,13 @@ object Generator {
       decimation,
       arraySize)
 
-  val referenceEpoch = {
+  lazy val referenceEpoch = {
     val now = DateTime.now(DateTimeZone.UTC)
     val halfYearMonth = (((now.getMonthOfYear - 1) / 6) * 6) + 1
     now.withDate(now.getYear, halfYearMonth, 1).withTimeAtStartOfDay
   }
 
-  val refEpoch =
+  lazy val refEpoch =
     (2 * (referenceEpoch.getYear - 2000) +
       ((referenceEpoch.getMonthOfYear - 1) / 6))
 
