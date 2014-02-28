@@ -1,7 +1,9 @@
 package edu.nrao.vlite
 
-import akka.actor.{ ActorRef, Actor, Props, ActorSystem }
+import akka.actor.{ ActorRef, Actor, Props, ActorSystem, PoisonPill }
+import akka.io.{ PipelineFactory, PipelinePorts }
 import akka.testkit.{ ImplicitSender, TestKit, TestActorRef }
+import akka.util.ByteString
 import scala.concurrent.duration._
 import org.scalatest._
 
@@ -19,92 +21,79 @@ class GeneratorSpec(_system: ActorSystem)
   override def beforeAll() {
     transporter = Some(system.actorOf(
       Props(classOf[GeneratorSpec.TestTransporter], testActor)))
-    transporter map (_ ! Transporter.Start)
   }
 
   override def afterAll() {
-    transporter map (_ ! Transporter.Stop)
+    transporter map (_ ! PoisonPill)
     system.shutdown()
     system.awaitTermination(10.seconds)
   }
 
-  def testGenerator(threadID: Int, stationID: Int, rate: Int) = {
+  val arraySize = 5000
+
+  val decimation = 100
+
+  object VLITEConfig extends VLITEConfig {
+    val dataArraySize = arraySize
+    lazy val initDataArray = Seq.fill[Byte](dataArraySize)(0)
+  }
+
+  val PipelinePorts(_, vliteEventPipeline, _) =
+    PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
+
+  def testGenerator(threadID: Int, stationID: Int) = {
     system.actorOf(Generator.props(
       threadID,
       stationID,
       transporter.get,
-      decimation = Generator.framesPerSec / rate))
+      decimation = decimation,
+      arraySize = arraySize))
   }
 
-  "A Generator" should "start in the idle state" in {
-    val generator = testGenerator(0, 0, 100)
-    expectNoMsg
-  }
-
-  it should "generate frames after start" in {
-    val generator = testGenerator(0, 0, 100)
-    generator ! Generator.Start
+  "A Generator" should "generate frames after start" in {
+    val generator = testGenerator(0, 0)
     expectMsgClass(classOf[GeneratorSpec.Packet])
-    generator ! Generator.Stop
+    generator ! PoisonPill
   }
 
   it should "not generate frames after stop" in {
     import system._
-    val generator = testGenerator(0, 0, 100)
-    generator ! Generator.Start
-    scheduler.scheduleOnce(1.seconds, generator, Generator.Stop)
-    receiveWhile(1200.millis) {
+    val generator = testGenerator(0, 0)
+    scheduler.scheduleOnce(1.seconds, generator, PoisonPill)
+    receiveWhile(1500.millis) {
       case _: GeneratorSpec.Packet => true
     }
     expectNoMsg
-  }
-
-  it should "allow restarts" in {
-    import system._
-    val generator = testGenerator(0, 0, 100)
-    generator ! Generator.Start
-    scheduler.scheduleOnce(500.millis, generator, Generator.Stop)
-    receiveWhile(700.millis) {
-      case _: GeneratorSpec.Packet => true
-    }
-    expectNoMsg
-    generator ! Generator.Start
-    expectMsgClass(classOf[GeneratorSpec.Packet])
-    generator ! Generator.Stop
   }
 
   it should "generate frames at the desired rate" in {
     import system._
-    val generator = testGenerator(0, 0, 100)
-    generator ! Generator.Start
-    scheduler.scheduleOnce(5.seconds, generator, Generator.Stop)
+    val generator = testGenerator(0, 0)
+    scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
     val frames = receiveWhile(6.seconds) {
       case _: GeneratorSpec.Packet => true
     }
-    frames.length should === (500 +- 1)
+    frames.length should === (5 * VLITEConfig.framesPerSec / decimation +- 1)
   }
 
   it should "generate frames with the provided threadID and stationID" in {
     import system._
     val threadID = 111
     val stationID = 890
-    val generator = testGenerator(threadID, stationID, 100)
-    generator ! Generator.Start
+    val generator = testGenerator(threadID, stationID)
     val packet = expectMsgClass(classOf[GeneratorSpec.Packet])
-    generator ! Generator.Stop
-    val frame = packet.buffer.asInstanceOf[TypedBuffer[Ethernet[VLITEFrame]]].
-      read.payload
-    frame.header.threadID should === (threadID)
-    frame.header.stationID should === (stationID)
+    generator ! PoisonPill
+    val header = vliteEventPipeline(packet.byteString)._1.head
+    header.threadID should === (threadID)
+    header.stationID should === (stationID)
   }
 
   it should "maintain a maximum latency of one second" in {
     import system._
-    val generator = testGenerator(0, 0, 100)
+    val generator = testGenerator(0, 0)
     ignoreMsg {
       case _: GeneratorSpec.Packet => true
     }
-    generator ! Generator.Start
     receiveWhile(2.seconds) {
       case _ => true
     }
@@ -121,16 +110,16 @@ class GeneratorSpec(_system: ActorSystem)
       case _ => true
     }
     latency should beZeroOrOne
-    generator ! Generator.Stop
+    generator ! PoisonPill
   }
 }
 
 object GeneratorSpec {
-  case class Packet(buffer: TypedBuffer[_])
+  case class Packet(byteString: ByteString)
 
   class TestTransporter(destination: ActorRef) extends Transporter {
-    protected def sendBuffer(buffer: TypedBuffer[_]) = {
-      destination ! Packet(buffer)
+    protected def send(byteString: ByteString) = {
+      destination ! Packet(byteString)
       true
     }
   }

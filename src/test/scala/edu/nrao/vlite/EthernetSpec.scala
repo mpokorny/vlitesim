@@ -1,12 +1,16 @@
 package edu.nrao.vlite
 
-import java.nio.ByteBuffer
+import akka.util.{ ByteString, ByteStringBuilder }
+import akka.io._
 import org.scalatest._
+import java.nio.ByteOrder
 
-class FrameSpec extends FlatSpec with Matchers {
+class EthernetSpec extends FlatSpec with Matchers {
 
-  final class TestPayload(val int: Int, val float: Float, val short: Short)
-      extends Frame[TestPayload] {
+  final case class TestPayload(val int: Int, val float: Float, val short: Short)
+      extends HasEtherCode {
+    def etherCode = 88
+
     override def equals(other: Any) = other match {
       case TestPayload(tInt, tFloat, tShort) =>
         tInt == int && tFloat == float && tShort == short
@@ -24,38 +28,39 @@ class FrameSpec extends FlatSpec with Matchers {
     override def toString = s"TestPayload($int,$float,$short)"
   }
 
-  object TestPayload {
-    def apply(int: Int, float: Float, short: Short) =
-      new TestPayload(int, float, short)
+  object TestPayloadStage
+      extends SymmetricPipelineStage[EthernetContext, TestPayload, ByteString] {
 
-    def unapply(p: TestPayload) =
-      Some((p.int, p.float, p.short))
+    implicit val byteOrder = ByteOrder.BIG_ENDIAN
 
-    implicit object PayloadBuilder extends FrameBuilder[TestPayload] {
-      val frameSize: Short = 10
+    override def apply(ctx: EthernetContext) =
+      new SymmetricPipePair[TestPayload, ByteString] {
+        
+        def commandPipeline = { payload: TestPayload =>
+          val bb = ByteString.newBuilder
+          bb.putInt(payload.int).putFloat(payload.float).putShort(payload.short)
+          ctx.singleCommand(bb.result)
+        }
 
-      def apply(testPayload: TestPayload, buffer: TypedBuffer[TestPayload]) {
-        val b = buffer.byteBuffer
-        b.putInt(testPayload.int)
-        b.putFloat(testPayload.float)
-        b.putShort(testPayload.short)
+        def eventPipeline = { bs: ByteString =>
+          val iter = bs.iterator
+          val int = iter.getInt
+          val float = iter.getFloat
+          val short = iter.getShort
+          ctx.singleEvent(TestPayload(int, float, short))
+        }
       }
-    }
-
-    implicit object PayloadReader extends FrameReader[TestPayload] {
-      def apply(buffer: TypedBuffer[TestPayload]) = {
-        val b = buffer.byteBuffer
-        val int = b.getInt()
-        val float = b.getFloat()
-        val short = b.getShort()
-        TestPayload(int, float, short)
-      }
-    }
-
-    implicit object EthernetBuilder extends Ethernet.Builder[TestPayload]
-
-    implicit object EthernetReader extends Ethernet.Reader[TestPayload]
   }
+
+  object EthernetContext extends EthernetContext {
+    def withEthCRC(bs: ByteString)(implicit byteOrder: ByteOrder): ByteString =
+      bs
+  }
+
+  object TestStage extends EthernetStage(TestPayloadStage)
+
+  lazy val PipelinePorts(pipelinePort, eventPort, _) =
+    PipelineFactory.buildFunctionTriple(EthernetContext, TestStage)
 
   "An Ethernet frame" should
     "encode and decode a test payload" in {
@@ -63,7 +68,9 @@ class FrameSpec extends FlatSpec with Matchers {
       val src = MAC(0,1,2,3,4,5)
       val dst = MAC(10,11,12,13,14,15)
       val eth = Ethernet(source=src, destination=dst, payload=t)
-      eth should === (eth.frame.read)
+      val bin = pipelinePort(eth)._2.head
+      val eth1 = eventPort(bin)._1.head
+      eth should === (eth1)
   }
 
 }

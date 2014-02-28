@@ -1,23 +1,32 @@
 package edu.nrao.vlite
 
-import java.nio.ByteBuffer
 import org.scalatest._
+import akka.io.{ PipelineFactory, PipelinePorts }
 
 class VLITESpec extends FlatSpec with Matchers {
 
+  val arraySize = 5000
+
+  object VLITEConfig extends VLITEConfig {
+    val dataArraySize = arraySize
+    lazy val initDataArray = Seq.fill[Byte](dataArraySize)(0)
+  }
+
+  val PipelinePorts(vliteCommandPipeline, vliteEventPipeline, _) =
+    PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
+
   "A VLITE frame" should
-    "encode to Ethernet and decode again" in {
-      val v = VLITEFrame(VLITEHeader(
+    "encode to binary and decode again" in {
+      val hdr = VLITEHeader(
         isInvalidData = false,
         secFromRefEpoch = 1000,
         refEpoch = 1,
         numberWithinSec = 50,
         threadID = 1,
-        stationID = 6))
-      val src = MAC(0,1,2,3,4,5)
-      val dst = MAC(10,11,12,13,14,15)
-      val eth = Ethernet(source=src, destination=dst, payload=v)
-      eth should === (eth.frame.read)
+        stationID = 6,
+        lengthBy8 = (arraySize + 32) / 8)
+      val frame = vliteCommandPipeline(hdr)._2.head
+      val hdr1 = vliteEventPipeline(frame)._1.head
+      hdr1 should === (hdr)
   }
-
 }
