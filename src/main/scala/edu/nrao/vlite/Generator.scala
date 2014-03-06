@@ -138,7 +138,7 @@ final class SimdataGenerator(
     val SimParams(seed, filter, scale, offset, numRngThreads) = simParams
     val dataArraySize = arraySize
     val system = gen.context.system
-    implicit val timeout = Timeout(gen.durationPerFrame)
+    implicit val timeout = Timeout(4 * gen.durationPerFrame)
   }
 }
 
