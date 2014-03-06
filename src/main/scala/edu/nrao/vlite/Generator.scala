@@ -4,22 +4,19 @@ import scala.concurrent.duration._
 import org.joda.time.{ DateTime, DateTimeZone, Duration => JodaDuration }
 import akka.actor._
 import akka.io.{ PipelineFactory, PipelinePorts }
-import akka.util.ByteString
+import akka.util.{ ByteString, Timeout }
 
-final class Generator(
+abstract class Generator(
   val threadID: Int,
   val stationID: Int,
   val transporter: ActorRef,
   val pace: FiniteDuration,
-  decimation: Int = 1,
-  arraySize: Int = 5000) extends Actor with ActorLogging {
+  decimation: Int)
+    extends Actor with ActorLogging {
 
   import context._
 
-  implicit object VLITEConfig extends VLITEConfig {
-    val dataArraySize = arraySize
-    lazy val initDataArray = Seq.fill[Byte](dataArraySize)(0)
-  }
+  implicit val VLITEConfig: VLITEConfig
 
   override def preStart() {
     require(
@@ -83,7 +80,6 @@ final class Generator(
         val decCount = count / decimation
         secFromRefEpoch = sec
         numberWithinSec = decCount
-        incNumberWithinSec()
         become(running)
       case Generator.GetLatency =>
         sender ! Generator.Latency(0)
@@ -106,6 +102,46 @@ final class Generator(
   }
 }
 
+final class ZeroGenerator(
+  threadID: Int,
+  stationID: Int,
+  transporter: ActorRef,
+  pace: FiniteDuration,
+  decimation: Int,
+  arraySize: Int)
+    extends Generator(threadID, stationID, transporter, pace, decimation) {
+
+  implicit object VLITEConfig extends VLITEConfigZeroData {
+    val dataArraySize = arraySize
+  }
+}
+
+final case class SimParams(
+  seed: Long,
+  filter: Vector[Double],
+  scale: Double,
+  offset: Long,
+  numRngThreads: Int)
+
+final class SimdataGenerator(
+  threadID: Int,
+  stationID: Int,
+  transporter: ActorRef,
+  pace: FiniteDuration,
+  decimation: Int,
+  arraySize: Int,
+  simParams: SimParams)
+    extends Generator(threadID, stationID, transporter, pace, decimation) {
+  gen =>
+
+  implicit object VLITEConfig extends VLITEConfigSimData {
+    val SimParams(seed, filter, scale, offset, numRngThreads) = simParams
+    val dataArraySize = arraySize
+    val system = gen.context.system
+    implicit val timeout = Timeout(gen.durationPerFrame)
+  }
+}
+
 object Generator {
   def props(
     threadID: Int,
@@ -113,15 +149,27 @@ object Generator {
     transporter: ActorRef,
     pace: FiniteDuration = 1.millis,
     decimation: Int = 1,
-    arraySize: Int = 5000): Props =
-    Props(
-      classOf[Generator],
-      threadID,
-      stationID,
-      transporter,
-      pace,
-      decimation,
-      arraySize)
+    arraySize: Int = 5000,
+    simParams: Option[SimParams] = None): Props =
+    if (simParams.isDefined)
+      Props(
+        classOf[SimdataGenerator],
+        threadID,
+        stationID,
+        transporter,
+        pace,
+        decimation,
+        arraySize,
+        simParams.get)
+    else
+      Props(
+        classOf[ZeroGenerator],
+        threadID,
+        stationID,
+        transporter,
+        pace,
+        decimation,
+        arraySize)
 
   lazy val referenceEpoch = {
     val now = DateTime.now(DateTimeZone.UTC)

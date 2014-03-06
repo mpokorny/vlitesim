@@ -33,21 +33,35 @@ class GeneratorSpec(_system: ActorSystem)
 
   val decimation = 100
 
-  object VLITEConfig extends VLITEConfig {
+  object VLITEConfigZeroData extends VLITEConfigZeroData {
     val dataArraySize = arraySize
-    lazy val initDataArray = Seq.fill[Byte](dataArraySize)(0)
   }
 
-  val PipelinePorts(_, vliteEventPipeline, _) =
-    PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
+  val PipelinePorts(_, evtPipeZero, _) =
+    PipelineFactory.buildFunctionTriple(VLITEConfigZeroData, VLITEStage)
 
-  def testGenerator(threadID: Int, stationID: Int) = {
+  val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128.0)
+
+  object VLITEConfigSimData extends VLITEConfigSimData {
+    val SimParams(seed, filter, scale, offset) = simParams
+    val dataArraySize = arraySize
+  }
+
+  val PipelinePorts(_, evtPipeSim, _) =
+    PipelineFactory.buildFunctionTriple(VLITEConfigSimData, VLITEStage)
+
+  def testGenerator(
+    threadID: Int,
+    stationID: Int,
+    decimation: Int = decimation,
+    simData: Boolean = false) = {
     system.actorOf(Generator.props(
       threadID,
       stationID,
       transporter.get,
       decimation = decimation,
-      arraySize = arraySize))
+      arraySize = arraySize,
+      simParams = if (simData) Some(simParams) else None))
   }
 
   "A Generator" should "generate frames after start" in {
@@ -73,7 +87,8 @@ class GeneratorSpec(_system: ActorSystem)
     val frames = receiveWhile(6.seconds) {
       case _: GeneratorSpec.Packet => true
     }
-    frames.length should === (5 * VLITEConfig.framesPerSec / decimation +- 1)
+    frames.length should === (
+      5 * VLITEConfigZeroData.framesPerSec / decimation +- 1)
   }
 
   it should "generate frames with the provided threadID and stationID" in {
@@ -83,7 +98,7 @@ class GeneratorSpec(_system: ActorSystem)
     val generator = testGenerator(threadID, stationID)
     val packet = expectMsgClass(classOf[GeneratorSpec.Packet])
     generator ! PoisonPill
-    val header = vliteEventPipeline(packet.byteString)._1.head
+    val (header, _) = evtPipeZero(packet.byteString)._1.head
     header.threadID should === (threadID)
     header.stationID should === (stationID)
   }
@@ -111,6 +126,21 @@ class GeneratorSpec(_system: ActorSystem)
     }
     latency should beZeroOrOne
     generator ! PoisonPill
+  }
+
+  it should "generate simulated frames upon request" in {
+    import system._
+    val decimation = 512
+    val generator = testGenerator(0, 0, decimation = decimation, simData = true)
+    scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
+    val frames = receiveWhile(10.seconds) {
+      case GeneratorSpec.Packet(bs) => bs
+    }
+    val dataFrames = frames map { f =>
+      evtPipeSim(f)._1.head._2
+    }
+    dataFrames.length should === (
+      5 * VLITEConfigSimData.framesPerSec / decimation +- 1)
   }
 }
 

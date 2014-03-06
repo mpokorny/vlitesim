@@ -16,7 +16,8 @@ case class EmulatorInstance(
   device: Option[String],
   decimation: Int,
   arraySize: Int,
-  destination: (String, String))
+  destination: (String, String),
+  simParams: Option[SimParams])
 
 class SettingsImpl(config: Config) extends Extension {
   import scala.collection.JavaConversions._
@@ -54,8 +55,22 @@ class SettingsImpl(config: Config) extends Extension {
           case Emulator.Transport.UDP =>
             (None, (destinationSock, ""), None)
         }
+        val hostname = instanceConf.getString("hostname")
+        val simParams =
+          if (instanceConf.getBoolean("simulate-array-data")) {
+            val params =
+              instanceConf.getObject("simulated-array-data-params").toConfig
+            Some(SimParams(
+              seed = params.getLong("seed"),
+              filter = params.getDoubleList("filter").map(_.toDouble).toVector,
+              scale = params.getDouble("scale"),
+              offset = params.getLong("offset"),
+              numRngThreads = params.getInt("num-rng-threads")))
+          } else {
+            None
+          }
         EmulatorInstance(
-          hostname = instanceConf.getString("hostname"),
+          hostname = hostname,
           stationID =
             instanceConf.getString("stationID").getBytes.take(2) match {
               case Array(first, second) => (first.toInt << 8) + second.toInt
@@ -67,7 +82,8 @@ class SettingsImpl(config: Config) extends Extension {
           device = device,
           decimation = instanceConf.getInt("decimation"),
           arraySize = instanceConf.getInt("vdif-data-size"),
-          destination = destination)
+          destination = destination,
+          simParams = simParams)
       }
     }
   val controllerHostname = config.getString("controller.hostname")

@@ -20,7 +20,8 @@ class Controller extends Actor with ActorLogging {
       sourceIDs = instance.threadIDs map (tid => (instance.stationID, tid)),
       pace = instance.pace,
       decimation = instance.decimation,
-      arraySize = instance.arraySize).
+      arraySize = instance.arraySize,
+      simParams = instance.simParams).
       withDeploy(Deploy(
         scope = RemoteScope(settings.remoteAddress(instance.hostname)))),
       s"emulator${index}")

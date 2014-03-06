@@ -1,7 +1,10 @@
 package edu.nrao.vlite
 
-import akka.util.ByteString
-import akka.io.{ SymmetricPipelineStage, SymmetricPipePair, PipelineContext }
+import scala.concurrent.{ Await, Future }
+import akka.actor._
+import akka.pattern.ask
+import akka.util.{ ByteString, Timeout }
+import akka.io.{ PipelineStage, PipePair, PipelineContext }
 import java.nio.ByteOrder.LITTLE_ENDIAN
 
 final class VLITEHeader(
@@ -97,8 +100,9 @@ object VLITEHeader {
 }
 
 trait VLITEConfig extends PipelineContext {
-  def dataArraySize: Int
-  def initDataArray: Seq[Byte]
+  val dataArraySize: Int
+
+  def dataArray: ByteString
 
   val samplesPerSec = 128 * 1000000
 
@@ -111,10 +115,10 @@ trait VLITEConfig extends PipelineContext {
 }
 
 object VLITEStage
-    extends SymmetricPipelineStage[VLITEConfig, VLITEHeader, ByteString] {
+    extends PipelineStage[VLITEConfig, VLITEHeader, ByteString, (VLITEHeader, Seq[Byte]), ByteString] {
 
   override def apply(ctx: VLITEConfig) =
-    new SymmetricPipePair[VLITEHeader, ByteString] {
+    new PipePair[VLITEHeader, ByteString, (VLITEHeader, Seq[Byte]), ByteString] {
 
       implicit val byteOrder = LITTLE_ENDIAN
 
@@ -172,11 +176,11 @@ object VLITEStage
           putInt(hdr.extendedUserData1).
           putInt(hdr.extendedUserData2).
           putInt(hdr.extendedUserData3)
-        bb ++= ctx.initDataArray
+        bb ++= ctx.dataArray
         ctx.singleCommand(bb.result)
       }
 
-      protected def extractOne(bs: ByteString): VLITEHeader = {
+      protected def extractOne(bs: ByteString): (VLITEHeader, Seq[Byte]) = {
         val iter = bs.iterator
         val word0 = iter.getInt
         val word1 = iter.getInt
@@ -188,18 +192,23 @@ object VLITEStage
         val extendedUserData3 = iter.getInt
         val hdrLengthBy8 = word2 & ((1 << 24) - 1)
         assert(hdrLengthBy8 == lengthBy8)
-        VLITEHeader(
+        val array = new Array[Byte](ctx.dataArraySize)
+        iter.getBytes(array)
+        (VLITEHeader(
           isInvalidData = (word0 & (1 << 31)) != 0,
           secFromRefEpoch = word0 & ((1 << 30) - 1),
           refEpoch = (word1 >> 24) & ((1 << 6) - 1),
           numberWithinSec = word1 & ((1 << 24) - 1),
           lengthBy8 = hdrLengthBy8,
           threadID = (word3 >> 16) & ((1 << 10) - 1),
-          stationID = word3 & ((1 << 16) - 1))
+          stationID = word3 & ((1 << 16) - 1)),
+          array.toSeq)
       }
 
-      protected def extractFrameHeaders(bs: ByteString, acc: List[VLITEHeader]):
-          (Option[ByteString], List[VLITEHeader]) = {
+      protected def extractFrames(
+        bs: ByteString,
+        acc: List[(VLITEHeader, Seq[Byte])]):
+          (Option[ByteString], List[(VLITEHeader, Seq[Byte])]) = {
         if (bs.isEmpty)
           (None, acc)
         else if (bs.length < frameSize)
@@ -207,19 +216,69 @@ object VLITEStage
         else
           bs.splitAt(frameSize) match {
             case (first, rest) =>
-              extractFrameHeaders(rest, extractOne(first) :: acc)
+              extractFrames(rest, extractOne(first) :: acc)
           }
       }
 
       def eventPipeline = { bs: ByteString =>
         val data = if (buffer.isEmpty) bs else buffer.get ++ bs
-        val (nb, headers) = extractFrameHeaders(data, Nil)
+        val (nb, frames) = extractFrames(data, Nil)
         buffer = nb
-        headers match {
+        frames match {
           case Nil        => Nil
           case one :: Nil => ctx.singleEvent(one)
           case many       => many reverseMap (Left(_))
         }
       }
     }
+}
+
+trait VLITEConfigZeroData extends VLITEConfig {
+  val zeroDataArray = {
+    val bldr = ByteString.newBuilder
+    bldr.sizeHint(dataArraySize)
+    (1 to dataArraySize) foreach (_ => bldr.putByte(0.toByte))
+    bldr.result
+  }
+  def dataArray = zeroDataArray
+}
+
+trait VLITEConfigSimData extends VLITEConfig {
+  val seed: Long
+
+  val filter: Seq[Double]
+
+  val scale: Double
+
+  val offset: Long
+
+  val numRngThreads: Int
+
+  val system: ActorSystem
+
+  val bsActor = system.actorOf(
+    ByteStringSource.props(
+      SimulatedValueSource.props(
+        (1 to numRngThreads) map (_ + seed),
+        offset,
+        scale,
+        filter),
+      dataArraySize))
+
+  implicit val timeout: Timeout
+
+  implicit val executionContext = system.dispatcher
+
+  def nextRequest: Future[ByteString] =
+    (bsActor ? ValueSource.Get) map {
+      case ValueSource.Value(bs: ByteString) => bs
+    }
+
+  var nextValue: Future[ByteString] = nextRequest
+
+  def dataArray = {
+    val result = Await.result(nextValue, timeout.duration)
+    nextValue = nextRequest
+    result
+  }
 }

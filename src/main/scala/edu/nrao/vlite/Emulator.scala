@@ -17,7 +17,8 @@ final class Emulator(
   val sourceIDs: Seq[(Int, Int)],
   val pace: FiniteDuration = Emulator.defaultPace,
   val decimation: Int = Emulator.defaultDecimation,
-  val arraySize: Int = Emulator.defaultArraySize)
+  val arraySize: Int = Emulator.defaultArraySize,
+  val simParams: Option[SimParams] = None)
     extends Actor with ActorLogging {
 
   import context._
@@ -46,13 +47,23 @@ final class Emulator(
 
   val generators = sourceIDs map {
     case (stationID, threadID) =>
+      val sp = simParams.map {
+        case SimParams(seed, filter, scale, offset, numRngThreads) =>
+          SimParams(
+            seed ^ ((stationID.toLong << 48) ^ (threadID.toLong << 32)),
+            filter,
+            scale,
+            offset,
+            numRngThreads)
+      }
       actorOf(Generator.props(
         stationID = stationID,
         threadID = threadID,
         transporter = transporter,
         pace = pace,
         decimation = decimation,
-        arraySize = arraySize))
+        arraySize = arraySize,
+        simParams = sp))
   }
 
   protected implicit val queryTimeout = Timeout(1.seconds)
@@ -128,7 +139,8 @@ object Emulator {
     sourceIDs: Seq[(Int, Int)],
     pace: FiniteDuration = defaultPace,
     decimation: Int = defaultDecimation,
-    arraySize: Int = defaultArraySize): Props =
+    arraySize: Int = defaultArraySize,
+    simParams: Option[SimParams] = None): Props =
     Props(
       classOf[Emulator],
       transport,
@@ -139,7 +151,8 @@ object Emulator {
       sourceIDs,
       pace,
       decimation,
-      arraySize)
+      arraySize,
+      simParams)
 
   val defaultPace = 1.milli
 
