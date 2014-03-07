@@ -12,26 +12,55 @@ class ByteStringSource(
   import context._
 
   val byteSource = actorOf(byteSourceProps)
+
+  val valueRatio = (length, 1)
   
-  def requestValue() {
-    byteSource ! ValueSource.Get
+  def requestValues(n: Int) {
+    byteSource ! ValueSource.Get(n)
   }
 
-  var builder: Option[ByteStringBuilder] = None
+  var currentBuilder: Option[ByteStringBuilder] = None
 
-  def receiveValue(a: Any): List[ByteString] = {
-    if (!builder.isDefined) {
+  def builder(optBuilder: Option[ByteStringBuilder]): Option[ByteStringBuilder] = {
+    if (!optBuilder.isDefined) {
       val b = ByteString.newBuilder
       b.sizeHint(length)
-      builder = Some(b)
-    }
-    val bld = builder.get
-    bld.putByte(a.asInstanceOf[Byte])
-    if (bld.length == length) {
-      builder = None
-      List(bld.result)
+      Some(b)
     } else {
-      Nil
+      optBuilder
+    }
+  }
+
+  def collectByteStrings(
+    acc: Vector[ByteString],
+    optBuilder: Option[ByteStringBuilder],
+    bs: Vector[Byte]): (Vector[ByteString], Option[ByteStringBuilder]) = {
+    bs match {
+      case Vector() => (acc, optBuilder)
+      case _ => {
+        val bldr = builder(optBuilder).get
+        val (nextAcc, nextBuilder, remBs) =
+          (bs splitAt (length - bldr.length)) match {
+            case (bsPrefix, bsSuffix) =>
+              bldr ++= bsPrefix
+              if (bldr.length == length)
+                (acc :+ bldr.result, None, bsSuffix)
+              else
+                (acc, Some(bldr), bsSuffix)
+          }
+        collectByteStrings(nextAcc, nextBuilder, remBs)
+      }
+    }
+  }
+
+  def receiveValues(as: Vector[Any]): Vector[ByteString] = {
+    collectByteStrings(
+      Vector.empty,
+      currentBuilder,
+      as.asInstanceOf[Vector[Byte]]) match {
+      case (result, optBuilder) =>
+        currentBuilder = optBuilder
+        result
     }
   }
 }

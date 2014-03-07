@@ -3,7 +3,7 @@ package edu.nrao.vlite
 import akka.actor.{ ActorRef, Actor, Props, ActorSystem, PoisonPill }
 import akka.io.{ PipelineFactory, PipelinePorts }
 import akka.testkit.{ ImplicitSender, TestKit, TestActorRef }
-import akka.util.ByteString
+import akka.util.{ ByteString, Timeout }
 import scala.concurrent.duration._
 import org.scalatest._
 
@@ -13,7 +13,8 @@ class GeneratorSpec(_system: ActorSystem)
     with FlatSpecLike
     with BeforeAndAfterAll
     with Matchers {
-  
+  spec =>
+
   def this() = this(ActorSystem("GeneratorSpec"))
 
   var transporter: Option[ActorRef] = None
@@ -40,11 +41,14 @@ class GeneratorSpec(_system: ActorSystem)
   val PipelinePorts(_, evtPipeZero, _) =
     PipelineFactory.buildFunctionTriple(VLITEConfigZeroData, VLITEStage)
 
-  val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128.0)
+  val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128, 2)
 
   object VLITEConfigSimData extends VLITEConfigSimData {
-    val SimParams(seed, filter, scale, offset) = simParams
+    val SimParams(seed, filter, scale, offset, numRngThreads) = simParams
     val dataArraySize = arraySize
+    val system = spec.system
+    implicit val timeout = Timeout(1, SECONDS)
+    val bufferSize = 2
   }
 
   val PipelinePorts(_, evtPipeSim, _) =
@@ -88,7 +92,7 @@ class GeneratorSpec(_system: ActorSystem)
       case _: GeneratorSpec.Packet => true
     }
     frames.length should === (
-      5 * VLITEConfigZeroData.framesPerSec / decimation +- 1)
+      5 * VLITEConfigZeroData.framesPerSec / decimation +- 10)
   }
 
   it should "generate frames with the provided threadID and stationID" in {
@@ -101,6 +105,21 @@ class GeneratorSpec(_system: ActorSystem)
     val (header, _) = evtPipeZero(packet.byteString)._1.head
     header.threadID should === (threadID)
     header.stationID should === (stationID)
+  }
+
+  it should "generate simulated frames upon request" in {
+    import system._
+    val decimation = 512
+    val generator = testGenerator(0, 0, decimation = decimation, simData = true)
+    scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
+    val frames = receiveWhile(6.seconds) {
+      case GeneratorSpec.Packet(bs) => bs
+    }
+    val dataFrames = frames map { f =>
+      evtPipeSim(f)._1.head._2
+    }
+    dataFrames.length should === (
+      5 * VLITEConfigSimData.framesPerSec / decimation +- 5)
   }
 
   it should "maintain a maximum latency of one second" in {
@@ -126,21 +145,6 @@ class GeneratorSpec(_system: ActorSystem)
     }
     latency should beZeroOrOne
     generator ! PoisonPill
-  }
-
-  it should "generate simulated frames upon request" in {
-    import system._
-    val decimation = 512
-    val generator = testGenerator(0, 0, decimation = decimation, simData = true)
-    scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
-    val frames = receiveWhile(10.seconds) {
-      case GeneratorSpec.Packet(bs) => bs
-    }
-    val dataFrames = frames map { f =>
-      evtPipeSim(f)._1.head._2
-    }
-    dataFrames.length should === (
-      5 * VLITEConfigSimData.framesPerSec / decimation +- 1)
   }
 }
 

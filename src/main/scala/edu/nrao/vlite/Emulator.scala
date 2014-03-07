@@ -4,7 +4,7 @@ import akka.actor._
 import akka.util.Timeout
 import akka.pattern.{ ask, pipe }
 import scala.concurrent.duration._
-import scala.collection.mutable
+import scala.concurrent.Future
 import scala.util.Try
 import java.net.InetSocketAddress
 
@@ -48,13 +48,12 @@ final class Emulator(
   val generators = sourceIDs map {
     case (stationID, threadID) =>
       val sp = simParams.map {
-        case SimParams(seed, filter, scale, offset, numRngThreads) =>
+        case SimParams(seed, filter, scale, offset) =>
           SimParams(
             seed ^ ((stationID.toLong << 48) ^ (threadID.toLong << 32)),
             filter,
             scale,
-            offset,
-            numRngThreads)
+            offset)
       }
       actorOf(Generator.props(
         stationID = stationID,
@@ -66,7 +65,7 @@ final class Emulator(
         simParams = sp))
   }
 
-  protected implicit val queryTimeout = Timeout(1.seconds)
+  protected implicit val queryTimeout = Timeout(2.seconds)
 
   override def preStart() {
     println(s"Start ${self.path}")
@@ -80,46 +79,13 @@ final class Emulator(
         log.warning(msg)
     }
 
-  private val latencies = mutable.Seq.fill(generators.length)(-1)
-
-  private var latencyRequesters = Vector.empty[ActorRef]
-
-  private var latencyTimeout: Option[Cancellable] = None
-
-  private def haveAllLatencies = latencies forall (_ != -1)
-
-  private def resetLatencies() {
-    for (i <- 0 until latencies.length) latencies(i) = -1
-    latencyRequesters = Vector.empty
-    latencyTimeout foreach (_.cancel)
-    latencyTimeout = None
-  }
-
-  private def sendLatencyResponses() {
-    val values = (sourceIDs.zip(latencies).filter {
-      case (_, -1) => false
-      case _ => true
-    }).toMap
-    for (r <- latencyRequesters) r ! Emulator.Latencies(values)
-    resetLatencies()
-  }
-
   def getGenLatencies: Receive = {
     case Emulator.GetGeneratorLatencies =>
-      if (latencyRequesters.isEmpty) {
-        for (g <- generators) g ! Generator.GetLatency
-        latencyTimeout = Some(system.scheduler.scheduleOnce(
-          queryTimeout.duration,
-          self,
-          Emulator.LatenciesTimeout))
-      }
-      latencyRequesters = latencyRequesters :+ sender
-    case Generator.Latency(l) =>
-      latencies(generators.indexOf(sender)) = l
-      if (haveAllLatencies)
-        sendLatencyResponses()
-    case Emulator.LatenciesTimeout =>
-      sendLatencyResponses()
+      Future.traverse(generators) { g =>
+        (g ? Generator.GetLatency) map {
+          case Generator.Latency(sec) => sec
+        }
+      } map { ls => Emulator.Latencies(sourceIDs.zip(ls).toMap) } pipeTo sender
   }
 
   def getBufferCount: Receive = {

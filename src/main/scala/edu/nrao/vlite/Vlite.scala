@@ -1,6 +1,7 @@
 package edu.nrao.vlite
 
 import scala.concurrent.{ Await, Future }
+import scala.concurrent.duration._
 import akka.actor._
 import akka.pattern.ask
 import akka.util.{ ByteString, Timeout }
@@ -234,7 +235,7 @@ object VLITEStage
 }
 
 trait VLITEConfigZeroData extends VLITEConfig {
-  val zeroDataArray = {
+  lazy val zeroDataArray = {
     val bldr = ByteString.newBuilder
     bldr.sizeHint(dataArraySize)
     (1 to dataArraySize) foreach (_ => bldr.putByte(0.toByte))
@@ -246,39 +247,41 @@ trait VLITEConfigZeroData extends VLITEConfig {
 trait VLITEConfigSimData extends VLITEConfig {
   val seed: Long
 
-  val filter: Seq[Double]
+  val filter: Vector[Double]
 
   val scale: Double
 
   val offset: Long
 
-  val numRngThreads: Int
-
   val system: ActorSystem
 
-  val bsActor = system.actorOf(
+  def bufferSize: Int
+
+  lazy val bsActor = system.actorOf(
     ByteStringSource.props(
       SimulatedValueSource.props(
-        (1 to numRngThreads) map (_ + seed),
+        seed,
         offset,
         scale,
         filter),
-      dataArraySize))
+      dataArraySize,
+      bufferSize))
 
   implicit val timeout: Timeout
 
-  implicit val executionContext = system.dispatcher
+  implicit lazy val executionContext = system.dispatcher
 
   def nextRequest: Future[ByteString] =
-    (bsActor ? ValueSource.Get) map {
-      case ValueSource.Value(bs: ByteString) => bs
+    (bsActor ? ValueSource.Get(1)) map {
+      case ValueSource.Values(bss) => bss(0).asInstanceOf[ByteString]
     }
 
-  var nextValue: Future[ByteString] = nextRequest
+  var nextValue: Option[Future[ByteString]] = None
 
   def dataArray = {
-    val result = Await.result(nextValue, timeout.duration)
-    nextValue = nextRequest
+    val nv = nextValue.getOrElse(nextRequest)
+    val result = Await.result(nv, timeout.duration)
+    nextValue = Some(nextRequest)
     result
   }
 }

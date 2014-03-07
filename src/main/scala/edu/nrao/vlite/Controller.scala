@@ -58,8 +58,10 @@ class Controller extends Actor with ActorLogging {
 
   def receive: Receive = {
     case Controller.TriggerDebug =>
-      foreachEmulator { _ ! Emulator.GetGeneratorLatencies }
-      foreachEmulator { _ ! Transporter.GetBufferCount }
+      foreachEmulator { em =>
+        em ! Emulator.GetGeneratorLatencies
+        em ! Transporter.GetBufferCount
+      }
     case latencies: Emulator.Latencies =>
       log.info("{}", latencies)
     case count: Transporter.BufferCount =>

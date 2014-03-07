@@ -64,8 +64,7 @@ class SettingsImpl(config: Config) extends Extension {
               seed = params.getLong("seed"),
               filter = params.getDoubleList("filter").map(_.toDouble).toVector,
               scale = params.getDouble("scale"),
-              offset = params.getLong("offset"),
-              numRngThreads = params.getInt("num-rng-threads")))
+              offset = params.getLong("offset")))
           } else {
             None
           }

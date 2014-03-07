@@ -1,52 +1,56 @@
 package edu.nrao.vlite
 
-import scala.collection.mutable
 import akka.actor._
 
 class SimulatedValueSource(
-  seeds: Seq[Long],
+  seed: Long,
   val mean: Double,
   val stdDev: Double,
-  val filter: List[Double],
+  val filter: Vector[Double],
   val bufferSize: Int) extends ValueSourceBase[Byte] {
 
   import context._
 
-  val gaussianSource = actorOf(GaussianValueSource.props(mean, stdDev, seeds))
+  val gaussianSource = actorOf(GaussianValueSource.props(mean, stdDev, seed))
 
-  val gaussianRVs = mutable.Queue[Double]()
+  var gaussianRVs: Vector[Double] = Vector.empty
+
+  val valueRatio = (1, 1)
   
-  def requestValue() {
-    gaussianSource ! ValueSource.Get
+  def requestValues(n: Int) {
+    gaussianSource ! ValueSource.Get(n + filter.length - 1 - gaussianRVs.length)
   }
 
-  def receiveValue(a: Any): List[Byte] = {
-    gaussianRVs.enqueue(a.asInstanceOf[Double])
-    if (gaussianRVs.length == filter.length) {
-      val d = ((0.0, filter) /: gaussianRVs.toList) {
-        case ((acc, c :: cs), rv) => (acc + c * rv, cs)
-      } match {
-        case (sum, _) => sum
-      }
-      gaussianRVs.dequeue()
-      List(((d max 0.0) min 255.0).toByte)
-    } else {
-      Nil
+  private def filtered(rvs: Vector[Double]): Byte = {
+    val d = ((0.0, filter) /: rvs) {
+      case ((acc, c +: cs), rv) => (acc + c * rv, cs)
+    } match {
+      case (sum, _) => sum
     }
+    ((d max 0.0) min 255.0).toByte
   }
+
+  def receiveValues(as: Vector[Any]): Vector[Byte] = {
+    gaussianRVs ++= as.asInstanceOf[Vector[Double]]
+    assert(gaussianRVs.length >= filter.length)
+    val result = gaussianRVs.sliding(filter.length) map (filtered _)
+    gaussianRVs = gaussianRVs takeRight (filter.length - 1)
+    result.toVector
+  }
+
 }
 
 object SimulatedValueSource {
   def props(
-    seeds: Seq[Long],
+    seed: Long,
     mean: Double,
     stdDev: Double,
-    filter: Seq[Double],
+    filter: Vector[Double],
     bufferSize: Int = 1) =
       Props(classOf[SimulatedValueSource],
-        seeds,
+        seed,
         mean,
         stdDev,
-        filter.toList,
+        filter,
         bufferSize)
 }

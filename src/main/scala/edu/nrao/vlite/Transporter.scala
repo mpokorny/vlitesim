@@ -7,7 +7,7 @@ import java.net.{ InetAddress, Inet4Address, InetSocketAddress }
 import java.nio.ByteOrder
 
 object Transporter {
-  case class Transport(byteString: ByteString)
+  case class Transport(byteStrings: Vector[ByteString])
   case object GetBufferCount
   case class BufferCount(count: Long)
   case class OpenWarning(message: String)
@@ -20,10 +20,12 @@ trait Transporter extends Actor with ActorLogging {
   protected var bufferCount: Long = 0L
 
   def receive: Receive = {
-    case Transport(byteString) =>
-      if (send(byteString)) {
-        if (bufferCount < Long.MaxValue) bufferCount += 1
-        else bufferCount = 0
+    case Transport(byteStrings) =>
+      byteStrings foreach { bs =>
+        if (send(bs)) {
+          if (bufferCount < Long.MaxValue) bufferCount += 1
+          else bufferCount = 0
+        }
       }
     case GetBufferCount =>
       sender ! BufferCount(bufferCount)

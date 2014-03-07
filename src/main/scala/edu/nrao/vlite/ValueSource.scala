@@ -1,105 +1,121 @@
 package edu.nrao.vlite
 
-import scala.collection.mutable
 import akka.actor._
-import akka.util.Timeout
 
 abstract class ValueSourceBase[V] extends Actor {
 
   val bufferSize: Int
 
-  private val buffer: mutable.Queue[V] = mutable.Queue()
+  def requestValues(n: Int): Unit
 
-  private val pending: mutable.Queue[ActorRef] = mutable.Queue()
+  def receiveValues(as: Vector[Any]): Vector[V]
 
-  def requestValue(): Unit
+  val valueRatio: (Int, Int) // this actor's request to value ratio
 
-  def receiveValue(a: Any): List[V]
+  private var buffer: Vector[V] = Vector.empty
 
-  private def sendValue(v: V, to: ActorRef) {
-    to ! ValueSource.Value(v)
-    if (buffer.length < bufferSize)
-      requestValue()
-  }
+  private var pendingGets: Vector[(ActorRef, Int)] = Vector.empty
 
-  private def sendToPending() {
-    if (pending.length > 0 && buffer.length > 0) {
-      sendValue(buffer.dequeue(), pending.dequeue())
-      sendToPending()
+  private var pendingReceives: Int = 0
+
+  private def ceil(n: Int, d: Int) =
+    (n + (d - n % d) % d) / d
+
+  private def requestFullBuffer() {
+    val eventualLength = buffer.length + pendingReceives
+    val deficit = bufferSize - eventualLength
+    if (deficit > 0) {
+      requestValues(numRequests(deficit))
+      pendingReceives += deficit
     }
   }
 
+  private def numRequests(numValues: Int) = 
+    if (numValues > 0)
+      valueRatio match { case (r, v) => ceil(numValues * r, v) }
+    else
+      0
+
+  private def sendToPendingGets() {
+    pendingGets match {
+      case Vector() =>
+        requestFullBuffer()
+      case (actor, numValues) +: ps =>
+        if (buffer.length > numValues) {
+          pendingGets = ps
+          fulfillRequest(actor, numValues)
+          sendToPendingGets()
+        } else {
+          requestFullBuffer()
+        }
+    }
+  }
+
+  private def fulfillRequest(to: ActorRef, n: Int) {
+    if (n > 0)
+      buffer.splitAt(n) match {
+        case (vs, rem) =>
+          to ! ValueSource.Values(vs)
+          buffer = rem
+      }
+    else
+      to ! ValueSource.Values(Vector.empty[V])
+  }
+
+  private def addPendingGet(to: ActorRef, numValues: Int) {
+    val nv = numValues max 0
+    requestValues(numRequests(nv))
+    pendingGets = pendingGets :+ ((to, nv))
+    pendingReceives += nv
+  }
+
   override def preStart() {
-    requestValue()
+    requestFullBuffer()
   }
 
   def receive: Receive = {
-    case ValueSource.Get =>
-      pending.enqueue(sender)
-    case ValueSource.Value(v) =>
-      receiveValue(v) match {
-        case Nil =>
-          requestValue()
-        case rcvd =>
-          buffer ++= rcvd
-          if (buffer.length < bufferSize)
-            requestValue()
-          else
-            sendToPending()
-            context.become(serving)
-      }
-  }
-
-  def serving: Receive = {
-    case ValueSource.Get =>
-      if (buffer.length > 0) sendValue(buffer.dequeue(), sender)
-      else pending.enqueue(sender)
-    case ValueSource.Value(v) =>
-      receiveValue(v) match {
-        case Nil =>
-          requestValue()
-        case rcvd =>
-          buffer ++= rcvd
-          sendToPending()
-      }
+    case ValueSource.Get(n) =>
+      addPendingGet(sender, n)
+      sendToPendingGets()
+    case ValueSource.Values(vs) =>
+      val newVs = receiveValues(vs)
+      pendingReceives -= newVs.length
+      buffer ++= newVs
+      sendToPendingGets()
   }
 }
 
-class ValueSource[V](sourceProps: Seq[Props], val bufferSize: Int)
+class ValueSource[V](sourceProps: Props, val bufferSize: Int)
     extends ValueSourceBase[V] {
 
-  var nextSourceIndex = 0
+  val valueRatio = (1, 1)
 
-  val sources = sourceProps.toVector map (p => context.actorOf(p))
+  val source = context.actorOf(sourceProps)
 
-  def requestValue() {
-    sources(nextSourceIndex) ! ValueSource.Get
-    nextSourceIndex = (nextSourceIndex + 1) % sources.length
+  def requestValues(n: Int) {
+    source ! ValueSource.Get(n)
   }
 
-  def receiveValue(a: Any): List[V] =
-    List(a.asInstanceOf[V])
+  def receiveValues(as: Vector[Any]): Vector[V] =
+    as.asInstanceOf[Vector[V]]
 }
 
 object ValueSource {
   def props[V](generate: () => V, bufferSize: Int): Props =
-    props(Vector(generate), bufferSize)
+    props(Props(classOf[Getter[V]], generate), bufferSize)
 
-  def props[V](generators: Seq[() => V], bufferSize: Int): Props =
-    Props(
-      classOf[ValueSource[V]],
-      generators map (g => Props(classOf[Getter[V]], g)),
-      bufferSize)
+  def props[V](sourceProps: Props, bufferSize: Int): Props =
+    Props(classOf[ValueSource[V]], sourceProps, bufferSize)
 
-  case object Get
-  case class Value[V](v: V)
+  case class Get(n: Int)
+  case class Values[V](v: Vector[V])
 
   private class Getter[V](generate: () => V) extends Actor {
     import context._
 
     def receive: Receive = {
-      case ValueSource.Get =>
-        sender ! ValueSource.Value(generate())
+      case ValueSource.Get(n) =>
+        sender ! ValueSource.Values((0 until n).toVector map (_ => generate()))
     }
   }
 }

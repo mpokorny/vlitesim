@@ -93,8 +93,7 @@ abstract class Generator(
       val decCount = count / decimation
       val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
         (decCount - numberWithinSec))
-      for (i <- 0 until numFrames)
-        transporter ! Transporter.Transport(nextFrame)
+      transporter ! Transporter.Transport(Vector.fill(numFrames)(nextFrame))
     }
     case Generator.GetLatency =>
       sender ! Generator.Latency(
@@ -120,8 +119,7 @@ final case class SimParams(
   seed: Long,
   filter: Vector[Double],
   scale: Double,
-  offset: Long,
-  numRngThreads: Int)
+  offset: Long)
 
 final class SimdataGenerator(
   threadID: Int,
@@ -135,10 +133,12 @@ final class SimdataGenerator(
   gen =>
 
   implicit object VLITEConfig extends VLITEConfigSimData {
-    val SimParams(seed, filter, scale, offset, numRngThreads) = simParams
+    val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
     val system = gen.context.system
-    implicit val timeout = Timeout(4 * gen.durationPerFrame)
+    //implicit lazy val timeout = Timeout(4 * gen.durationPerFrame)
+    implicit val timeout = Timeout(1, SECONDS)
+    def bufferSize = (2 * pace.toMillis * framesPerMs).toInt
   }
 }
 
