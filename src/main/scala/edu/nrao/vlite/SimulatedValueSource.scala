@@ -33,7 +33,7 @@ class SimulatedValueSource(
   def receiveValues(as: Vector[Any]): Vector[Byte] = {
     gaussianRVs ++= as.asInstanceOf[Vector[Double]]
     assert(gaussianRVs.length >= filter.length)
-    val result = gaussianRVs.sliding(filter.length) map (filtered _)
+    val result = gaussianRVs.sliding(filter.length).toArray.par map (filtered _)
     gaussianRVs = gaussianRVs takeRight (filter.length - 1)
     result.toVector
   }
