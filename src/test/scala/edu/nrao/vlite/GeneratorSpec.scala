@@ -41,10 +41,10 @@ class GeneratorSpec(_system: ActorSystem)
   val PipelinePorts(_, evtPipeZero, _) =
     PipelineFactory.buildFunctionTriple(VLITEConfigZeroData, VLITEStage)
 
-  val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128, 2)
+  val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128)
 
   object VLITEConfigSimData extends VLITEConfigSimData {
-    val SimParams(seed, filter, scale, offset, numRngThreads) = simParams
+    val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
     val system = spec.system
     implicit val timeout = Timeout(1, SECONDS)
