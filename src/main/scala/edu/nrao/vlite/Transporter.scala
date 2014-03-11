@@ -240,7 +240,7 @@ final class UdpTransporter(val dst: InetSocketAddress)
 
   protected def send(byteString: ByteString) = {
     (channel.map { ch =>
-      val b = byteString.compact.asByteBuffer
+      val b = byteString.asByteBuffer
       ch.write(b) == b.limit
     }).getOrElse(false)
   }
