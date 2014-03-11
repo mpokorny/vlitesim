@@ -93,7 +93,8 @@ abstract class Generator(
       val decCount = count / decimation
       val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
         (decCount - numberWithinSec))
-      transporter ! Transporter.Transport(Vector.fill(numFrames)(nextFrame))
+      if (numFrames > 0)
+        transporter ! Transporter.Transport(Vector.fill(numFrames)(nextFrame))
     }
     case Generator.GetLatency =>
       sender ! Generator.Latency(
