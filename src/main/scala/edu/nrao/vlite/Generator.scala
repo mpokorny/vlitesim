@@ -139,7 +139,9 @@ final class SimdataGenerator(
     val system = gen.context.system
     //implicit lazy val timeout = Timeout(4 * gen.durationPerFrame)
     implicit val timeout = Timeout(1, SECONDS)
-    def bufferSize = (2 * pace.toMillis * framesPerMs).toInt
+    private def ceil(n: Int, d: Int) =
+      (n + (d - n % d) % d) / d
+    def bufferSize = ceil(gen.framesPerSec, (1.second / pace).toInt) max 2
   }
 }
 
