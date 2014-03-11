@@ -141,7 +141,7 @@ final class SimdataGenerator(
     implicit val timeout = Timeout(1, SECONDS)
     private def ceil(n: Int, d: Int) =
       (n + (d - n % d) % d) / d
-    def bufferSize = ceil(gen.framesPerSec, (1.second / pace).toInt) max 2
+    def bufferSize = (2 * ceil(gen.framesPerSec, (1.second / pace).toInt)) max 2
   }
 }
 
