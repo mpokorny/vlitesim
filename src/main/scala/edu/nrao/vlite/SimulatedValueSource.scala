@@ -45,12 +45,12 @@ object SimulatedValueSource {
     seed: Long,
     mean: Double,
     stdDev: Double,
-    filter: Vector[Double],
+    filter: Seq[Double],
     bufferSize: Int = 1) =
       Props(classOf[SimulatedValueSource],
         seed,
         mean,
         stdDev,
-        filter,
+        filter.toVector,
         bufferSize)
 }
