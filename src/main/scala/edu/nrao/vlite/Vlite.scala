@@ -1,11 +1,11 @@
 package edu.nrao.vlite
 
-import scala.concurrent.{ Await, Future }
+import scala.concurrent.{ Await, Future, ExecutionContext }
 import scala.concurrent.duration._
 import akka.actor._
 import akka.pattern.ask
 import akka.util.{ ByteString, Timeout }
-import akka.io.{ PipelineStage, PipePair, PipelineContext }
+import akka.io.{ SymmetricPipelineStage, SymmetricPipePair, PipelineContext }
 import java.nio.ByteOrder.LITTLE_ENDIAN
 
 final class VLITEHeader(
@@ -59,6 +59,8 @@ final class VLITEHeader(
     s"VLITEHeader($isInvalidData,$secFromRefEpoch,$refEpoch,$numberWithinSec,$threadID,$stationID,$lengthBy8)"
 }
 
+case class VLITEFrame(header: VLITEHeader, dataArray: ByteString)
+
 object VLITEHeader {
   def apply(
     isInvalidData: Boolean,
@@ -103,7 +105,7 @@ object VLITEHeader {
 trait VLITEConfig extends PipelineContext {
   val dataArraySize: Int
 
-  def dataArray: ByteString
+  def dataArray: Future[ByteString]
 
   val samplesPerSec = 128 * 1000000
 
@@ -116,10 +118,10 @@ trait VLITEConfig extends PipelineContext {
 }
 
 object VLITEStage
-    extends PipelineStage[VLITEConfig, VLITEHeader, ByteString, (VLITEHeader, Seq[Byte]), ByteString] {
+    extends SymmetricPipelineStage[VLITEConfig, VLITEFrame, ByteString] {
 
   override def apply(ctx: VLITEConfig) =
-    new PipePair[VLITEHeader, ByteString, (VLITEHeader, Seq[Byte]), ByteString] {
+    new SymmetricPipePair[VLITEFrame, ByteString] {
 
       implicit val byteOrder = LITTLE_ENDIAN
 
@@ -132,56 +134,57 @@ object VLITEStage
       private def shiftMaskOr(acc: Int, v: Int, nbits: Int) =
         (acc << nbits) | (v & ((1 << nbits) - 1))
 
-      def commandPipeline = { hdr: VLITEHeader =>
-        val bb = ByteString.newBuilder.
-          putInt(
-            shiftMaskOr(
-              shiftMaskOr(
-                if (hdr.isInvalidData) 1 else 0,
-                if (hdr.isLegacyMode) 1 else 0,
-                1),
-              hdr.secFromRefEpoch,
-              30)).
-          putInt(
-            shiftMaskOr(
-              shiftMaskOr(
-                0, // 2bits
-                hdr.refEpoch,
-                6),
-              hdr.numberWithinSec,
-              24)).
-          putInt(
-            shiftMaskOr(
-              shiftMaskOr(
-                hdr.version, // 3 bits
-                hdr.log2NumChannels,
-                5),
-              lengthBy8,
-              24)).
-          putInt(
-            shiftMaskOr(
+      def commandPipeline = {
+        case VLITEFrame(header, dataArray) =>
+          val bb = ByteString.newBuilder.
+            putInt(
               shiftMaskOr(
                 shiftMaskOr(
-                  if (hdr.isComplexData) 1 else 0,
-                  hdr.bitsPerSampleLess1,
+                  if (header.isInvalidData) 1 else 0,
+                  if (header.isLegacyMode) 1 else 0,
+                  1),
+                header.secFromRefEpoch,
+                30)).
+            putInt(
+              shiftMaskOr(
+                shiftMaskOr(
+                  0, // 2bits
+                  header.refEpoch,
+                  6),
+                header.numberWithinSec,
+                24)).
+            putInt(
+              shiftMaskOr(
+                shiftMaskOr(
+                  header.version, // 3 bits
+                  header.log2NumChannels,
                   5),
-                hdr.threadID,
-                10),
-              hdr.stationID,
-              16)).
-          putInt(
-            shiftMaskOr(
-              hdr.extendedDataVersion,
-              hdr.extendedUserData0,
-              24)).
-          putInt(hdr.extendedUserData1).
-          putInt(hdr.extendedUserData2).
-          putInt(hdr.extendedUserData3)
-        bb ++= ctx.dataArray
-        ctx.singleCommand(bb.result)
+                lengthBy8,
+                24)).
+            putInt(
+              shiftMaskOr(
+                shiftMaskOr(
+                  shiftMaskOr(
+                    if (header.isComplexData) 1 else 0,
+                    header.bitsPerSampleLess1,
+                    5),
+                  header.threadID,
+                  10),
+                header.stationID,
+                16)).
+            putInt(
+              shiftMaskOr(
+                header.extendedDataVersion,
+                header.extendedUserData0,
+                24)).
+            putInt(header.extendedUserData1).
+            putInt(header.extendedUserData2).
+            putInt(header.extendedUserData3)
+          bb ++= dataArray
+          ctx.singleCommand(bb.result)
       }
 
-      protected def extractOne(bs: ByteString): (VLITEHeader, Seq[Byte]) = {
+      protected def extractOne(bs: ByteString): VLITEFrame = {
         val iter = bs.iterator
         val word0 = iter.getInt
         val word1 = iter.getInt
@@ -195,21 +198,20 @@ object VLITEStage
         assert(hdrLengthBy8 == lengthBy8)
         val array = new Array[Byte](ctx.dataArraySize)
         iter.getBytes(array)
-        (VLITEHeader(
-          isInvalidData = (word0 & (1 << 31)) != 0,
-          secFromRefEpoch = word0 & ((1 << 30) - 1),
-          refEpoch = (word1 >> 24) & ((1 << 6) - 1),
-          numberWithinSec = word1 & ((1 << 24) - 1),
-          lengthBy8 = hdrLengthBy8,
-          threadID = (word3 >> 16) & ((1 << 10) - 1),
-          stationID = word3 & ((1 << 16) - 1)),
-          array.toSeq)
+        VLITEFrame(
+          VLITEHeader(
+            isInvalidData = (word0 & (1 << 31)) != 0,
+            secFromRefEpoch = word0 & ((1 << 30) - 1),
+            refEpoch = (word1 >> 24) & ((1 << 6) - 1),
+            numberWithinSec = word1 & ((1 << 24) - 1),
+            lengthBy8 = hdrLengthBy8,
+            threadID = (word3 >> 16) & ((1 << 10) - 1),
+            stationID = word3 & ((1 << 16) - 1)),
+          ByteString(array))
       }
 
-      protected def extractFrames(
-        bs: ByteString,
-        acc: List[(VLITEHeader, Seq[Byte])]):
-          (Option[ByteString], List[(VLITEHeader, Seq[Byte])]) = {
+      protected def extractFrames(bs: ByteString, acc: List[VLITEFrame]):
+          (Option[ByteString], List[VLITEFrame]) = {
         if (bs.isEmpty)
           (None, acc)
         else if (bs.length < frameSize)
@@ -235,12 +237,15 @@ object VLITEStage
 }
 
 trait VLITEConfigZeroData extends VLITEConfig {
+  implicit val executionContext: ExecutionContext
+
   lazy val zeroDataArray = {
     val bldr = ByteString.newBuilder
     bldr.sizeHint(dataArraySize)
     (1 to dataArraySize) foreach (_ => bldr.putByte(0.toByte))
-    bldr.result
+    Future(bldr.result)
   }
+
   def dataArray = zeroDataArray
 }
 
@@ -280,8 +285,7 @@ trait VLITEConfigSimData extends VLITEConfig {
 
   def dataArray = {
     val nv = nextValue.getOrElse(nextRequest)
-    val result = Await.result(nv, timeout.duration)
     nextValue = Some(nextRequest)
-    result
+    nv
   }
 }

@@ -21,7 +21,9 @@ class GeneratorSpec(_system: ActorSystem)
 
   override def beforeAll() {
     transporter = Some(system.actorOf(
-      Props(classOf[GeneratorSpec.TestTransporter], testActor)))
+      Props(
+        classOf[Transporter],
+        Props(classOf[GeneratorSpec.TestSender], testActor))))
   }
 
   override def afterAll() {
@@ -35,6 +37,7 @@ class GeneratorSpec(_system: ActorSystem)
   val decimation = 100
 
   object VLITEConfigZeroData extends VLITEConfigZeroData {
+    implicit val executionContext = system.dispatcher
     val dataArraySize = arraySize
   }
 
@@ -102,9 +105,9 @@ class GeneratorSpec(_system: ActorSystem)
     val generator = testGenerator(threadID, stationID)
     val packet = expectMsgClass(classOf[GeneratorSpec.Packet])
     generator ! PoisonPill
-    val (header, _) = evtPipeZero(packet.byteString)._1.head
-    header.threadID should === (threadID)
-    header.stationID should === (stationID)
+    val frame = evtPipeZero(packet.byteString)._1.head
+    frame.header.threadID should === (threadID)
+    frame.header.stationID should === (stationID)
   }
 
   it should "generate simulated frames upon request" in {
@@ -116,7 +119,7 @@ class GeneratorSpec(_system: ActorSystem)
       case GeneratorSpec.Packet(bs) => bs
     }
     val dataFrames = frames map { f =>
-      evtPipeSim(f)._1.head._2
+      evtPipeSim(f)._1.head
     }
     dataFrames.length should === (
       5 * VLITEConfigSimData.framesPerSec / decimation +- 5)
@@ -151,7 +154,7 @@ class GeneratorSpec(_system: ActorSystem)
 object GeneratorSpec {
   case class Packet(byteString: ByteString)
 
-  class TestTransporter(destination: ActorRef) extends Transporter {
+  class TestSender(destination: ActorRef) extends ByteStringsSender {
     protected def send(byteString: ByteString) = {
       destination ! Packet(byteString)
       true

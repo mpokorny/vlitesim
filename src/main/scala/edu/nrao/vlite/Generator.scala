@@ -1,5 +1,6 @@
 package edu.nrao.vlite
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
 import org.joda.time.{ DateTime, DateTimeZone, Duration => JodaDuration }
 import akka.actor._
@@ -38,7 +39,7 @@ abstract class Generator(
   val PipelinePorts(vlitePipeline, _, _) =
     PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
 
-  protected def nextFrame: ByteString = {
+  protected def nextFrame: Future[ByteString] = {
     val header = VLITEHeader(
       isInvalidData = false,
       secFromRefEpoch = secFromRefEpoch,
@@ -47,8 +48,10 @@ abstract class Generator(
       threadID = threadID,
       stationID = stationID)
     incNumberWithinSec()
-    val (_, result) = vlitePipeline(header)
-    result.head
+    VLITEConfig.dataArray map { dataArray =>
+      val (_, result) = vlitePipeline(VLITEFrame(header, dataArray))
+      result.head
+    }
   }
 
   protected def incNumberWithinSec() {
@@ -110,8 +113,11 @@ final class ZeroGenerator(
   decimation: Int,
   arraySize: Int)
     extends Generator(threadID, stationID, transporter, pace, decimation) {
+  gen =>
 
   implicit object VLITEConfig extends VLITEConfigZeroData {
+    implicit val executionContext = gen.context.dispatcher
+
     val dataArraySize = arraySize
   }
 }
@@ -138,7 +144,7 @@ final class SimdataGenerator(
     val dataArraySize = arraySize
     val system = gen.context.system
     //implicit lazy val timeout = Timeout(4 * gen.durationPerFrame)
-    implicit val timeout = Timeout(1, SECONDS)
+    implicit val timeout = Timeout(10, SECONDS)
     private def ceil(n: Int, d: Int) =
       (n + (d - n % d) % d) / d
     def bufferSize = (2 * ceil(gen.framesPerSec, (1.second / pace).toInt)) max 2

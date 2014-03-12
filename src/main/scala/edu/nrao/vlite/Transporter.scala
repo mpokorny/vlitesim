@@ -1,43 +1,73 @@
 package edu.nrao.vlite
 
-import akka.actor.{ Actor, ActorRef, ActorLogging, Props }
+import scala.concurrent.{ Await, Future, ExecutionContext }
+import scala.concurrent.duration._
+import scala.util.{ Success, Failure }
+import akka.actor._
 import akka.util.ByteString
 import akka.io._
 import java.net.{ InetAddress, Inet4Address, InetSocketAddress }
 import java.nio.ByteOrder
 
 object Transporter {
-  case class Transport(byteStrings: Vector[ByteString])
+  case class Transport(byteStrings: Vector[Future[ByteString]])
   case object GetBufferCount
   case class BufferCount(count: Long)
   case class OpenWarning(message: String)
   case class OpenException(cause: String) extends Exception(cause)
 }
 
-trait Transporter extends Actor with ActorLogging {
+private case object IncrementBufferCount
+
+abstract class ByteStringsSender extends Actor with ActorLogging {
+  import context._
+
+  protected def send(byteString: ByteString): Boolean
+
+  def nextSend(sndr: ActorRef, fbss: Vector[Future[ByteString]])(
+    implicit ctx: ExecutionContext) {
+    fbss match {
+      case Vector() =>
+      case fbs +: remFbss =>
+        fbs.onComplete({
+          case Success(bs) =>
+            if (send(bs)) sndr ! IncrementBufferCount
+            nextSend(sndr, remFbss)(ctx)
+          case Failure(_) =>
+            nextSend(sndr, remFbss)(ctx)
+        })(ctx)
+    }
+  }
+
+  def receive: Receive = {
+    case Transporter.Transport(futureByteStrings) =>
+      nextSend(sender, futureByteStrings)
+  }
+}
+
+class Transporter(senderProps: Props) extends Actor with ActorLogging {
   import Transporter._
+  import context._
 
   protected var bufferCount: Long = 0L
 
+  val byteStringsSender = actorOf(senderProps)
+
   def receive: Receive = {
-    case Transport(byteStrings) =>
-      byteStrings foreach { bs =>
-        if (send(bs)) {
-          if (bufferCount < Long.MaxValue) bufferCount += 1
-          else bufferCount = 0
-        }
-      }
+    case t: Transport =>
+      byteStringsSender ! t
+    case IncrementBufferCount =>
+      if (bufferCount < Long.MaxValue) bufferCount += 1
+      else bufferCount = 0
     case GetBufferCount =>
       sender ! BufferCount(bufferCount)
   }
-
-  protected def send(byteString: ByteString): Boolean
 }
 
-abstract class EthernetTransporter[T <: HasEtherCode](
+abstract class EthernetSender[T <: HasEtherCode](
   val device: String,
   val dst: MAC)
-    extends Transporter {
+    extends ByteStringsSender {
   import edu.nrao.vlite.pcap._
   import Transporter._
   import EthernetTransporter._
@@ -85,8 +115,6 @@ abstract class EthernetTransporter[T <: HasEtherCode](
   
   protected def send(bs: ByteString) =
     pcap.sendPacket(toBinary(ethFrame(bs))) == 0
-
-  override def toString = s"EthernetTransporter($device)"
 }
 
 object RawEthernetContext extends EthernetContext {
@@ -94,8 +122,8 @@ object RawEthernetContext extends EthernetContext {
     bs
 }
 
-class RawEthernetTransporter(device: String, dst: MAC)
-    extends EthernetTransporter[Raw8023Frame](device, dst) {
+class RawEthernetSender(device: String, dst: MAC)
+    extends EthernetSender[Raw8023Frame](device, dst) {
 
   type PC = RawEthernetContext.type
 
@@ -107,8 +135,6 @@ class RawEthernetTransporter(device: String, dst: MAC)
 
   protected def ethFrame(bs: ByteString) =
     Ethernet(dst, src, Raw8023Frame(bs))
-
-  override def toString = s"RawEthernetTransporter($device)"
 }
 
 object UdpEthernetContext
@@ -168,12 +194,12 @@ object UdpEthernetContext
   }
 }
 
-class UdpEthernetTransporter(
+class UdpEthernetSender(
   device: String,
   dst: MAC,
   dstSock: InetSocketAddress,
   srcSock: InetSocketAddress)
-    extends EthernetTransporter[Ip4Frame[UdpFrame]](device, dst) {
+    extends EthernetSender[Ip4Frame[UdpFrame]](device, dst) {
 
   type PC = UdpEthernetContext.type
 
@@ -190,9 +216,6 @@ class UdpEthernetTransporter(
 
   protected def ethFrame(bs: ByteString) =
     Ethernet(dst, src, Ip4Frame(srcIP, dstIP, UdpFrame(srcSock, dstSock, bs)))
-
-  override def toString =
-    s"UdpEthernetTransporter($device,$dst,$dstSock,$srcSock)"
 }
 
 object EthernetTransporter {
@@ -210,14 +233,21 @@ object EthernetTransporter {
     framing: Framing.Framing): Props =
     framing match {
       case Framing.Raw =>
-        Props(classOf[RawEthernetTransporter], device, mac)
+        Props(classOf[Transporter],
+          Props(classOf[RawEthernetSender], device, mac))
       case Framing.UDP =>
-        Props(classOf[UdpEthernetTransporter], device, mac, dstSock.get, srcSock.get)
+        Props(classOf[Transporter],
+          Props(
+            classOf[UdpEthernetSender],
+            device,
+            mac,
+            dstSock.get,
+            srcSock.get))
     }
 }
 
-final class UdpTransporter(val dst: InetSocketAddress)
-    extends Transporter {
+class UdpSender(val dst: InetSocketAddress)
+    extends ByteStringsSender {
   import Transporter._
   import java.nio.channels.DatagramChannel
   import context._
@@ -234,8 +264,10 @@ final class UdpTransporter(val dst: InetSocketAddress)
     }
   }
 
-  override def postStop() {
+  override def preRestart(reason: Throwable, message: Option[Any]) {
     channel foreach (_.disconnect())
+    channel = None
+    super.preRestart(reason, message)
   }
 
   protected def send(byteString: ByteString) = {
@@ -244,11 +276,9 @@ final class UdpTransporter(val dst: InetSocketAddress)
       ch.write(b) == b.limit
     }).getOrElse(false)
   }
-
-  override def toString = s"UdpTransporter($dst)"
 }
 
 object UdpTransporter {
   def props(dst: InetSocketAddress): Props =
-    Props(classOf[UdpTransporter], dst)
+    Props(classOf[Transporter], Props(classOf[UdpSender], dst))
 }
