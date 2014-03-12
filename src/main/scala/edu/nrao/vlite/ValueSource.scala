@@ -32,7 +32,9 @@ abstract class ValueSourceBase[V] extends Actor {
 
   private def numRequests(numValues: Int) = 
     if (numValues > 0)
-      valueRatio match { case (r, v) => ceil(numValues * r, v) }
+      valueRatio match {
+        case (r, v) => ceil(numValues, v) * r
+      }
     else
       0
 
@@ -64,9 +66,12 @@ abstract class ValueSourceBase[V] extends Actor {
 
   private def addPendingGet(to: ActorRef, numValues: Int) {
     val nv = numValues max 0
-    requestValues(numRequests(nv))
+    val nr = numRequests(nv)
+    requestValues(nr)
     pendingGets = pendingGets :+ ((to, nv))
-    pendingReceives += nv
+    valueRatio match {
+      case (r, v) => pendingReceives += (nr * v) / r
+    }
   }
 
   override def preStart() {
