@@ -48,7 +48,7 @@ class Controller extends Actor with ActorLogging {
   }
 
   override def preStart() {
-    println(s"Start ${self.path}")
+    log.info(s"Start ${self.path}")
     system.scheduler.schedule(
       1.second,
       1.second,

@@ -68,7 +68,7 @@ final class Emulator(
   protected implicit val queryTimeout = Timeout(2.seconds)
 
   override def preStart() {
-    println(s"Start ${self.path}")
+    log.info(s"Start ${self.path}")
   }
 
   def receive: Receive = 
