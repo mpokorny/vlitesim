@@ -1,6 +1,6 @@
 package edu.nrao.vlite
 
-import scala.concurrent.Future
+import scala.concurrent.{ Await, Future }
 import scala.concurrent.duration._
 import org.joda.time.{ DateTime, DateTimeZone, Duration => JodaDuration }
 import akka.actor._
@@ -18,13 +18,6 @@ abstract class Generator(
   import context._
 
   implicit val VLITEConfig: VLITEConfig
-
-  override def preStart() {
-    require(
-      1 <= decimation && decimation <= VLITEConfig.framesPerSec,
-      s"Invalid frame rate decimation factor: must be between 1 and ${VLITEConfig.framesPerSec}"
-    )
-  }
 
   protected var secFromRefEpoch: Int = 0
   protected var numberWithinSec: Int = 0
@@ -62,35 +55,62 @@ abstract class Generator(
     }
   }
 
+  override def preStart() {
+    require(
+      1 <= decimation && decimation <= VLITEConfig.framesPerSec,
+      s"Invalid frame rate decimation factor: must be between 1 and ${VLITEConfig.framesPerSec}"
+    )
+    stream =
+      Some(system.scheduler.scheduleOnce(1.second, self, Generator.GenFrames))
+  }
+
   override def postStop() {
     stream.foreach(_.cancel)
     stream = None
   }
 
-  def receive = starting
-
-  def starting: Receive = {
-    numberWithinSec = 0
-    secFromRefEpoch = Generator.secondsFromRefEpoch
-    stream = Some(system.scheduler.schedule(
-      0.seconds,
-      pace,
-      self,
-      Generator.GenFrames))
-    val result: Receive = {
-      case Generator.GenFrames =>
-        val (sec, count) = Generator.timeFromRefEpoch
-        val decCount = count / decimation
-        secFromRefEpoch = sec
-        numberWithinSec = decCount
-        become(running)
-      case Generator.GetLatency =>
-        sender ! Generator.Latency(0)
-    }
-    result
+  def getExpectedFrameRate: Receive = {
+    case Generator.GetExpectedFrameRate =>
+      sender ! Generator.ExpectedFrameRate(framesPerSec)
   }
 
-  def running: Receive = {
+  def genFramesOnce() {
+    val (sec, count) = Generator.timeFromRefEpoch
+    secFromRefEpoch = sec
+    numberWithinSec = count / decimation
+    stream =
+      Some(system.scheduler.scheduleOnce(pace, self, Generator.GenFrames))
+  }
+
+  def receive = starting
+
+  def starting: Receive = getExpectedFrameRate orElse {
+    case Generator.GenFrames =>
+      genFramesOnce()
+      become(priming)
+  }
+
+  def priming: Receive = getExpectedFrameRate orElse {
+    case Generator.GenFrames => {
+      val (sec, count) = Generator.timeFromRefEpoch
+      val decCount = count / decimation
+      val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
+        (decCount - numberWithinSec))
+      if (numFrames > 0 &&
+        Await.result(
+          Future.traverse((0 until numFrames).toVector)(_ => nextFrame).
+            map(_ => true).recover { case _ => false },
+          Duration.Inf)) {
+        stream =
+          Some(system.scheduler.schedule(pace, pace, self, Generator.GenFrames))
+        become(running)
+      } else {
+        genFramesOnce()
+      }
+    }
+  }
+
+  def running: Receive = getExpectedFrameRate orElse {
     case Generator.GenFrames => {
       val (sec, count) = Generator.timeFromRefEpoch
       val decCount = count / decimation
@@ -99,9 +119,6 @@ abstract class Generator(
       if (numFrames > 0)
         transporter ! Transporter.Transport(Vector.fill(numFrames)(nextFrame))
     }
-    case Generator.GetLatency =>
-      sender ! Generator.Latency(
-        Generator.secondsFromRefEpoch - secFromRefEpoch)
   }
 }
 
@@ -142,9 +159,8 @@ final class SimdataGenerator(
   implicit object VLITEConfig extends VLITEConfigSimData {
     val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
-    val system = gen.context.system
-    //implicit lazy val timeout = Timeout(4 * gen.durationPerFrame)
-    implicit val timeout = Timeout(10, SECONDS)
+    lazy val context = gen.context
+    implicit lazy val timeout = Timeout(10 * gen.durationPerFrame)
     private def ceil(n: Int, d: Int) =
       (n + (d - n % d) % d) / d
     def bufferSize = 2 * ceil(gen.framesPerSec, (1.second / pace).toInt)
@@ -205,6 +221,6 @@ object Generator {
     timeFromRefEpoch(config)._2
 
   case object GenFrames
-  case object GetLatency
-  case class Latency(seconds: Int)
+  case object GetExpectedFrameRate
+  case class ExpectedFrameRate(framesPerSec: Int)
 }
