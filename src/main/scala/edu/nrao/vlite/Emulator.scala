@@ -2,7 +2,7 @@ package edu.nrao.vlite
 
 import akka.actor._
 import akka.util.Timeout
-import akka.pattern.{ ask, pipe }
+import akka.pattern.{ ask, pipe, AskTimeoutException }
 import scala.concurrent.duration._
 import scala.concurrent.Future
 import scala.util.Try
@@ -22,6 +22,10 @@ final class Emulator(
     extends Actor with ActorLogging {
 
   import context._
+
+  override val supervisorStrategy = AllForOneStrategy(maxNrOfRetries = -1) {
+    case _: AskTimeoutException => SupervisorStrategy.Restart
+  }
 
   val transporter = {
     val dstSock =
@@ -55,14 +59,16 @@ final class Emulator(
             scale,
             offset)
       }
-      actorOf(Generator.props(
-        stationID = stationID,
-        threadID = threadID,
-        transporter = transporter,
-        pace = pace,
-        decimation = decimation,
-        arraySize = arraySize,
-        simParams = sp))
+      actorOf(
+        Generator.props(
+          stationID = stationID,
+          threadID = threadID,
+          transporter = transporter,
+          pace = pace,
+          decimation = decimation,
+          arraySize = arraySize,
+          simParams = sp),
+        s"generator-$stationID-$threadID")
   }
 
   protected implicit val queryTimeout = Timeout(2.seconds)
@@ -72,20 +78,20 @@ final class Emulator(
   }
 
   def receive: Receive = 
-    getGenLatencies orElse getBufferCount orElse {
+    getExpectedFrameRate orElse getBufferCount orElse {
       case Transporter.OpenException(msg) =>
         log.error(msg)
       case Transporter.OpenWarning(msg) =>
         log.warning(msg)
     }
 
-  def getGenLatencies: Receive = {
-    case Emulator.GetGeneratorLatencies =>
+  def getExpectedFrameRate: Receive = {
+    case Emulator.GetExpectedFrameRate =>
       Future.traverse(generators) { g =>
-        (g ? Generator.GetLatency) map {
-          case Generator.Latency(sec) => sec
+        (g ? Generator.GetExpectedFrameRate) map {
+          case Generator.ExpectedFrameRate(rate) => rate
         }
-      } map { ls => Emulator.Latencies(sourceIDs.zip(ls).toMap) } pipeTo sender
+      } map { rates => Emulator.ExpectedFrameRate(rates.sum) } pipeTo sender
   }
 
   def getBufferCount: Receive = {
@@ -120,16 +126,14 @@ object Emulator {
       arraySize,
       simParams)
 
-  val defaultPace = 1.milli
+  val defaultPace = 10.millis
 
   val defaultDecimation = 1
 
   val defaultArraySize = 5000
 
-  case object GetGeneratorLatencies
-  case class Latencies(values: Map[(Int, Int), Int])
-  case object LatenciesTimeout
-  case object WasRunning
+  case object GetExpectedFrameRate
+  case class ExpectedFrameRate(framesPerSec: Int)
 
   object Transport extends Enumeration {
     type Transport = Value
