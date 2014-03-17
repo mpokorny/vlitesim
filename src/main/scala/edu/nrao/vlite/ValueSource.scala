@@ -95,7 +95,7 @@ class ValueSource[V](sourceProps: Props, val bufferSize: Int)
 
   val valueRatio = (1, 1)
 
-  val source = context.actorOf(sourceProps)
+  val source = context.actorOf(sourceProps, "source")
 
   def requestValues(n: Int) {
     source ! ValueSource.Get(n)

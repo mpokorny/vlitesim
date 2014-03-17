@@ -11,7 +11,7 @@ class ByteStringSource(
 
   import context._
 
-  val byteSource = actorOf(byteSourceProps)
+  val byteSource = actorOf(byteSourceProps, "byteSource")
 
   val valueRatio = (length, 1)
   

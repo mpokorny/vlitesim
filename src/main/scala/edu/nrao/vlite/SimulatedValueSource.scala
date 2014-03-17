@@ -11,7 +11,8 @@ class SimulatedValueSource(
 
   import context._
 
-  val gaussianSource = actorOf(GaussianValueSource.props(mean, stdDev, seed))
+  val gaussianSource =
+    actorOf(GaussianValueSource.props(mean, stdDev, seed), "gaussian")
 
   var gaussianRVs: Vector[Double] = Vector.empty
 
