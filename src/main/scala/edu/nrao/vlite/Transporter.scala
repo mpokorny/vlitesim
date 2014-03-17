@@ -4,6 +4,7 @@ import scala.concurrent.{ Await, Future, ExecutionContext }
 import scala.concurrent.duration._
 import scala.util.{ Success, Failure }
 import akka.actor._
+import akka.pattern.AskTimeoutException
 import akka.util.ByteString
 import akka.io._
 import java.net.{ InetAddress, Inet4Address, InetSocketAddress }
@@ -24,24 +25,33 @@ abstract class ByteStringsSender extends Actor with ActorLogging {
 
   protected def send(byteString: ByteString): Boolean
 
-  def nextSend(sndr: ActorRef, fbss: Vector[Future[ByteString]])(
-    implicit ctx: ExecutionContext) {
-    fbss match {
-      case Vector() =>
-      case fbs +: remFbss =>
-        fbs.onComplete({
-          case Success(bs) =>
-            if (send(bs)) sndr ! IncrementBufferCount
-            nextSend(sndr, remFbss)(ctx)
-          case Failure(_) =>
-            nextSend(sndr, remFbss)(ctx)
-        })(ctx)
-    }
-  }
+  var bsQueue: Vector[Future[ByteString]] = Vector.empty
+
+  case object SendNext
 
   def receive: Receive = {
     case Transporter.Transport(futureByteStrings) =>
-      nextSend(sender, futureByteStrings)
+      if (futureByteStrings.length > 0) {
+        if (bsQueue.isEmpty) self ! SendNext
+        bsQueue ++= futureByteStrings
+      }
+    case SendNext =>
+      bsQueue match {
+        case (head +: tail) =>
+          bsQueue = tail
+          val haveNext = !bsQueue.isEmpty
+          val slf = self
+          val prt = parent
+          head onComplete {
+            case Success(bs) =>
+              if (send(bs)) prt ! IncrementBufferCount
+              if (haveNext) slf ! SendNext
+            case f @ Failure(_) =>
+              slf ! f
+          }
+      }
+    case Failure(th) =>
+      throw th
   }
 }
 
@@ -49,9 +59,13 @@ class Transporter(senderProps: Props) extends Actor with ActorLogging {
   import Transporter._
   import context._
 
+  override val supervisorStrategy = OneForOneStrategy() {
+    case _: AskTimeoutException => SupervisorStrategy.Escalate
+  }
+
   protected var bufferCount: Long = 0L
 
-  val byteStringsSender = actorOf(senderProps)
+  val byteStringsSender = actorOf(senderProps, "sender")
 
   def receive: Receive = {
     case t: Transport =>
