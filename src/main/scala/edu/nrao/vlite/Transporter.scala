@@ -40,14 +40,13 @@ abstract class ByteStringsSender extends Actor with ActorLogging {
         case (head +: tail) =>
           bsQueue = tail
           val haveNext = !bsQueue.isEmpty
-          val slf = self
           val prt = parent
           head onComplete {
             case Success(bs) =>
               if (send(bs)) prt ! IncrementBufferCount
-              if (haveNext) slf ! SendNext
+              if (haveNext) self ! SendNext
             case f @ Failure(_) =>
-              slf ! f
+              self ! f
           }
       }
     case Failure(th) =>

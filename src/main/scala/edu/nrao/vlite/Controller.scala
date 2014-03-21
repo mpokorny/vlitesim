@@ -48,7 +48,6 @@ class Controller extends Actor with ActorLogging {
   case class BufferCounts(counts: Vector[Long])
 
   def getExpectedFrameRates {
-    val slf = self
     Future.traverse(emulators) { em =>
       (em.actorRef ? Emulator.GetExpectedFrameRate) map {
         case Emulator.ExpectedFrameRate(rate) => rate
@@ -56,9 +55,9 @@ class Controller extends Actor with ActorLogging {
       }
     } onComplete {
       case Success(rates) if rates.forall(_ >= 0) =>
-        slf ! ExpectedFrameRates(rates.toVector)
+        self ! ExpectedFrameRates(rates.toVector)
       case _ =>
-        slf ! GetExpectedFrameRates
+        self ! GetExpectedFrameRates
     }
   }
 
@@ -102,7 +101,6 @@ class Controller extends Actor with ActorLogging {
 
   def receive: Receive = {
     case GetBufferCounts =>
-      val slf = self
       Future.traverse(emulators) { em =>
         (em.actorRef ? Transporter.GetBufferCount) map {
           case Transporter.BufferCount(count) => count
@@ -111,7 +109,7 @@ class Controller extends Actor with ActorLogging {
           case _: Throwable => 0L
         }
       } onSuccess {
-        case counts => slf ! BufferCounts(counts.toVector)
+        case counts => self ! BufferCounts(counts.toVector)
       }
     case BufferCounts(counts: Vector[Long]) =>
       log.info("BufferCounts({})", counts.mkString(","))
