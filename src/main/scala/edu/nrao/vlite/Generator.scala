@@ -159,7 +159,8 @@ final class SimdataGenerator(
   implicit object VLITEConfig extends VLITEConfigSimData {
     val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
-    lazy val context = gen.context
+    lazy val actorRefFactory = gen.context
+    implicit lazy val executionContext = gen.context.dispatcher
     implicit lazy val timeout = Timeout(10 * gen.durationPerFrame)
     private def ceil(n: Int, d: Int) =
       (n + (d - n % d) % d) / d

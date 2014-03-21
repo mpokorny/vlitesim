@@ -32,7 +32,7 @@ class GeneratorSpec(_system: ActorSystem)
     system.awaitTermination(10.seconds)
   }
 
-  val arraySize = 5000
+  val arraySize = 1000
 
   val decimation = 100
 
@@ -49,9 +49,10 @@ class GeneratorSpec(_system: ActorSystem)
   object VLITEConfigSimData extends VLITEConfigSimData {
     val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
-    val system = spec.system
     implicit val timeout = Timeout(1, SECONDS)
     val bufferSize = 2
+    lazy val actorRefFactory = system
+    implicit lazy val executionContext = system.dispatcher
   }
 
   val PipelinePorts(_, evtPipeSim, _) =
@@ -69,6 +70,12 @@ class GeneratorSpec(_system: ActorSystem)
       decimation = decimation,
       arraySize = arraySize,
       simParams = if (simData) Some(simParams) else None))
+  }
+
+  def tossFrames(duration: Duration) {
+    receiveWhile(duration) {
+      case _ => true
+    }
   }
 
   "A Generator" should "generate frames after start" in {
@@ -90,12 +97,13 @@ class GeneratorSpec(_system: ActorSystem)
   it should "generate frames at the desired rate" in {
     import system._
     val generator = testGenerator(0, 0)
+    tossFrames(2.seconds)
     scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
     val frames = receiveWhile(6.seconds) {
       case _: GeneratorSpec.Packet => true
     }
     frames.length should === (
-      5 * VLITEConfigZeroData.framesPerSec / decimation +- 10)
+      5 * VLITEConfigZeroData.framesPerSec / decimation +- 50)
   }
 
   it should "generate frames with the provided threadID and stationID" in {
@@ -114,6 +122,7 @@ class GeneratorSpec(_system: ActorSystem)
     import system._
     val decimation = 512
     val generator = testGenerator(0, 0, decimation = decimation, simData = true)
+    tossFrames(2.seconds)
     scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
     val frames = receiveWhile(6.seconds) {
       case GeneratorSpec.Packet(bs) => bs
@@ -123,31 +132,6 @@ class GeneratorSpec(_system: ActorSystem)
     }
     dataFrames.length should === (
       5 * VLITEConfigSimData.framesPerSec / decimation +- 5)
-  }
-
-  it should "maintain a maximum latency of one second" in {
-    import system._
-    val generator = testGenerator(0, 0)
-    ignoreMsg {
-      case _: GeneratorSpec.Packet => true
-    }
-    receiveWhile(2.seconds) {
-      case _ => true
-    }
-    val beZeroOrOne = be(0) or be(1)
-    def latency = {
-      generator ! Generator.GetLatency
-      expectMsgClass(classOf[Generator.Latency]) match {
-        case Generator.Latency(latency) =>
-          latency
-      }
-    }
-    latency should beZeroOrOne
-    receiveWhile(2.seconds) {
-      case _ => true
-    }
-    latency should beZeroOrOne
-    generator ! PoisonPill
   }
 }
 

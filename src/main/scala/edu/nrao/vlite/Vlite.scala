@@ -258,11 +258,11 @@ trait VLITEConfigSimData extends VLITEConfig {
 
   val offset: Long
 
-  val context: ActorContext
+  val actorRefFactory: ActorRefFactory
 
   def bufferSize: Int
 
-  lazy val bsActor = context.actorOf(
+  lazy val bsActor = actorRefFactory.actorOf(
     ByteStringSource.props(
       SimulatedValueSource.props(
         seed,
@@ -275,7 +275,7 @@ trait VLITEConfigSimData extends VLITEConfig {
 
   implicit val timeout: Timeout
 
-  implicit lazy val executionContext = context.system.dispatcher
+  implicit val executionContext: ExecutionContext
 
   def nextRequest(implicit timeout: Timeout): Future[ByteString] =
     (bsActor ? ValueSource.Get(1)) map {
