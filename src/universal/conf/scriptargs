@@ -1,4 +1,3 @@
 -J-XX:+UseParallelGC
 -J-Xss1M
--Dakka.remote.netty.tcp.hostname="${VLITE_HOSTNAME:-$HOSTNAME}"
 -Dakka.kernel.quiet=true
