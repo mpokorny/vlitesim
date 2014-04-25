@@ -15,3 +15,5 @@ target/
 .classpath
 .project
 .settings
+_svn
+
