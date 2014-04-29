@@ -35,7 +35,7 @@ final class Emulator(
   val pace: FiniteDuration = Emulator.defaultPace,
   val decimation: Int = Emulator.defaultDecimation,
   val arraySize: Int = Emulator.defaultArraySize,
-  val simParams: Option[SimParams] = None)
+  val genParams: Option[GeneratorParams] = None)
     extends Actor with ActorLogging {
 
   import context._
@@ -68,13 +68,15 @@ final class Emulator(
 
   val generators = sourceIDs map {
     case (stationID, threadID) =>
-      val sp = simParams.map {
+      val gp = genParams.map {
         case SimParams(seed, filter, scale, offset) =>
           SimParams(
             seed ^ ((stationID.toLong << 48) ^ (threadID.toLong << 32)),
             filter,
             scale,
             offset)
+        case f: FileParams =>
+          f
       }
       actorOf(
         Generator.props(
@@ -84,7 +86,7 @@ final class Emulator(
           pace = pace,
           decimation = decimation,
           arraySize = arraySize,
-          simParams = sp),
+          genParams = gp),
         s"generator-$stationID-$threadID")
   }
 
@@ -129,7 +131,7 @@ object Emulator {
     pace: FiniteDuration = defaultPace,
     decimation: Int = defaultDecimation,
     arraySize: Int = defaultArraySize,
-    simParams: Option[SimParams] = None): Props =
+    genParams: Option[GeneratorParams] = None): Props =
     Props(
       classOf[Emulator],
       transport,
@@ -141,7 +143,7 @@ object Emulator {
       pace,
       decimation,
       arraySize,
-      simParams)
+      genParams)
 
   val defaultPace = 10.millis
 

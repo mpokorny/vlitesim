@@ -34,7 +34,7 @@ case class EmulatorInstance(
   decimation: Int,
   arraySize: Int,
   destination: (String, String),
-  simParams: Option[SimParams])
+  genParams: Option[GeneratorParams])
 
 class SettingsImpl(config: Config) extends Extension {
   import scala.collection.JavaConversions._
@@ -73,17 +73,24 @@ class SettingsImpl(config: Config) extends Extension {
             (None, (destinationSock, ""), None)
         }
         val hostname = instanceConf.getString("hostname")
-        val simParams =
-          if (instanceConf.getBoolean("simulate-array-data")) {
-            val params =
-              instanceConf.getObject("simulated-array-data-params").toConfig
-            Some(SimParams(
-              seed = params.getLong("seed"),
-              filter = params.getDoubleList("filter").map(_.toDouble).toVector,
-              scale = params.getDouble("scale"),
-              offset = params.getLong("offset")))
-          } else {
-            None
+        val genParams =
+          instanceConf.getString("array-data-content") match {
+            case "zero" =>
+              None
+            case "simulated" =>
+              val params =
+                instanceConf.getObject("simulated-array-data-params").toConfig
+              Some(SimParams(
+                seed = params.getLong("seed"),
+                filter = params.getDoubleList("filter").map(_.toDouble).toVector,
+                scale = params.getDouble("scale"),
+                offset = params.getLong("offset")))
+            case "file" =>
+              val params =
+                instanceConf.getObject("file-array-data-params").toConfig
+              Some(FileParams(
+                readBufferSize = params.getInt("read-buffer-size"),
+                fileNamePattern = params.getString("file-name-pattern")))
           }
         EmulatorInstance(
           hostname = hostname,
@@ -99,7 +106,7 @@ class SettingsImpl(config: Config) extends Extension {
           decimation = instanceConf.getInt("decimation"),
           arraySize = instanceConf.getInt("vdif-data-size"),
           destination = destination,
-          simParams = simParams)
+          genParams = genParams)
       }
     }
   val controllerHostname = config.getString("controller.hostname")
