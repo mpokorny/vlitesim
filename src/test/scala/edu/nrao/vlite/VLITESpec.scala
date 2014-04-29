@@ -19,16 +19,23 @@ package edu.nrao.vlite
 
 import org.scalatest._
 import akka.io.{ PipelineFactory, PipelinePorts }
+import akka.actor.ActorSystem
+import akka.util.ByteString
 import scala.math.{ sqrt, pow }
-import scala.concurrent.{ Await, ExecutionContext }
 import scala.concurrent.duration._
+import akka.testkit.{ ImplicitSender, TestKit }
 
-class VLITESpec extends FlatSpec with Matchers {
+class VLITESpec(_system: ActorSystem)
+    extends TestKit(_system)
+    with ImplicitSender
+    with FlatSpecLike
+    with Matchers {
+
+  def this() = this(ActorSystem("GeneratorSpec"))
 
   val arraySize = 5000
 
   object VLITEConfigZeroData extends VLITEConfigZeroData {
-    implicit lazy val executionContext = ExecutionContext.Implicits.global
     val dataArraySize = arraySize
   }
 
@@ -49,6 +56,11 @@ class VLITESpec extends FlatSpec with Matchers {
 
   "A VLITE frame" should
     "encode header to binary and decode it again" in {
+      VLITEConfigZeroData.dataArray(1)
+      val dataArray = receiveOne(2.seconds) match {
+        case ValueSource.Values(vs) =>
+          vs.asInstanceOf[Vector[ByteString]].head
+      }
       val frame = VLITEFrame(
         VLITEHeader(
           isInvalidData = false,
@@ -58,13 +70,18 @@ class VLITESpec extends FlatSpec with Matchers {
           threadID = 1,
           stationID = 6,
           lengthBy8 = (arraySize + 32) / 8),
-        Await.result(VLITEConfigZeroData.dataArray, 1.second))
+        dataArray)
       val bs = cmdPipeZero(frame)._2.head
       val frame1 = evtPipeZero(bs)._1.head
       frame1 should === (frame)
   }
 
   it should "provide zero array data when requested" in {
+    VLITEConfigZeroData.dataArray(1)
+    val dataArray = receiveOne(2.seconds) match {
+      case ValueSource.Values(vs) =>
+        vs.asInstanceOf[Vector[ByteString]].head
+    }
     val frame = VLITEFrame(
       VLITEHeader(
         isInvalidData = false,
@@ -74,7 +91,7 @@ class VLITESpec extends FlatSpec with Matchers {
         threadID = 1,
         stationID = 6,
         lengthBy8 = (arraySize + 32) / 8),
-      Await.result(VLITEConfigZeroData.dataArray, 1.second))
+      dataArray)
     val bs = cmdPipeZero(frame)._2.head
     val frame1 = evtPipeZero(bs)._1.head
     all (frame1.dataArray) should === (0)

@@ -23,6 +23,7 @@ import akka.testkit.{ ImplicitSender, TestKit, TestActorRef }
 import akka.util.{ ByteString, Timeout }
 import scala.concurrent.duration._
 import org.scalatest._
+import java.io.FileOutputStream
 
 class GeneratorSpec(_system: ActorSystem)
     extends TestKit(_system)
@@ -63,8 +64,25 @@ class GeneratorSpec(_system: ActorSystem)
 
   val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128)
 
+  val fileParams =
+    FileParams(2 * arraySize, "/tmp/test_@STATION@_@THREAD@.dat")
+
   object VLITEConfigSimData extends VLITEConfigSimData {
     val SimParams(seed, filter, scale, offset) = simParams
+    val dataArraySize = arraySize
+    implicit val timeout = Timeout(1, SECONDS)
+    val bufferSize = 2
+    lazy val actorRefFactory = system
+    implicit lazy val executionContext = system.dispatcher
+  }
+
+  val fileStationID = 4
+
+  val fileThreadID = 0
+
+  object VLITEConfigFileData extends VLITEConfigFileData {
+    val readBufferSize = fileParams.readBufferSize
+    val file = fileParams.file(fileStationID, fileThreadID)
     val dataArraySize = arraySize
     implicit val timeout = Timeout(1, SECONDS)
     val bufferSize = 2
@@ -79,14 +97,18 @@ class GeneratorSpec(_system: ActorSystem)
     threadID: Int,
     stationID: Int,
     decimation: Int = decimation,
-    simData: Boolean = false) = {
+    simData: Boolean = false,
+    fileData: Boolean = false) = {
     system.actorOf(Generator.props(
       threadID,
       stationID,
       transporter.get,
       decimation = decimation,
       arraySize = arraySize,
-      simParams = if (simData) Some(simParams) else None))
+      genParams =
+        if (simData) Some(simParams)
+        else if (fileData) Some(fileParams)
+        else None))
   }
 
   def tossFrames(duration: Duration) {
@@ -147,8 +169,70 @@ class GeneratorSpec(_system: ActorSystem)
     val dataFrames = frames map { f =>
       evtPipeSim(f)._1.head
     }
-    dataFrames.length should === (
-      5 * VLITEConfigSimData.framesPerSec / decimation +- 5)
+    // val expectedNumber = 5 * VLITEConfigSimData.framesPerSec / decimation
+    // val tolerance = expectedNumber / 100
+    dataFrames.length should be > 0
+  }
+
+  it should "generate frames from file data upon request" in {
+    import system._
+    val file = fileParams.file(fileStationID, fileThreadID)
+    val f = new FileOutputStream(file)
+    f.write(((0 until fileParams.readBufferSize) map (_.toByte)).toArray)
+    f.close()
+    try {
+      val generator = testGenerator(
+        fileStationID,
+        fileThreadID,
+        fileData = true)
+      tossFrames(2.seconds)
+      scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
+      val frames = receiveWhile(6.seconds) {
+        case GeneratorSpec.Packet(bs) => bs
+      }
+      val dataFrames = frames map { f =>
+        evtPipeSim(f)._1.head
+      }
+      // val expectedNumber = 5 * VLITEConfigSimData.framesPerSec / decimation
+      // val tolerance = expectedNumber / 100
+      dataFrames.length should be > 0
+    } finally {
+      file.delete()
+    }
+  }
+
+  it should "generate frames from file with expected data" in {
+    import system._
+    val file = fileParams.file(fileStationID, fileThreadID)
+    val f = new FileOutputStream(file)
+    f.write(((0 until fileParams.readBufferSize) map (_.toByte)).toArray)
+    f.close()
+    val decimation = 5120
+    try {
+      val generator = testGenerator(
+        fileStationID,
+        fileThreadID,
+        fileData = true)
+      scheduler.scheduleOnce(4.seconds, generator, PoisonPill)
+      val frames = receiveWhile(5.seconds) {
+        case GeneratorSpec.Packet(bs) => bs
+      }
+      val dataFrames = frames map { f => evtPipeSim(f)._1.head }
+      def dataArray(i: Int) = {
+        val result = new Array[Byte](dataFrames(i).dataArray.length)
+        dataFrames(i).dataArray.asByteBuffer.get(result)
+        result.toSeq
+      }
+      def expectedArray(i: Int) = {
+        ((i * arraySize) until ((i + 1) * arraySize)) map { n =>
+          (n % fileParams.readBufferSize).toByte
+        }
+      }
+      for (i <- 0 until dataFrames.length)
+        dataArray(i) should contain theSameElementsInOrderAs expectedArray(i)
+    } finally {
+      file.delete()
+    }
   }
 }
 

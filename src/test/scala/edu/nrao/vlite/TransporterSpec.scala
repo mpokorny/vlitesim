@@ -56,7 +56,7 @@ class TransporterSpec(_system: ActorSystem)
         classOf[Transporter],
         Props(classOf[TransporterSpec.TestSender], testActor)))
     val frame = ByteString("hello")
-    transporter ! Transport(Vector(Future(frame)))
+    transporter ! Transport(Vector(frame))
     expectMsg(TransporterSpec.Packet(frame))
     transporter ! PoisonPill
   }
@@ -68,7 +68,7 @@ class TransporterSpec(_system: ActorSystem)
         classOf[Transporter],
         Props(classOf[TransporterSpec.TestSender], testActor)))
     val numF = 4
-    val frame0 = Future(ByteString("hello"))
+    val frame0 = ByteString("hello")
     transporter ! Transport(Vector.fill(numF)(frame0))
     receiveN(numF)
     transporter ! GetBufferCount
