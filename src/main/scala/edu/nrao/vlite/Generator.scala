@@ -225,7 +225,7 @@ object Generator {
     threadID: Int,
     stationID: Int,
     transporter: ActorRef,
-    pace: FiniteDuration = 1.millis,
+    pace: FiniteDuration = 10.millis,
     decimation: Int = 1,
     arraySize: Int = 5000,
     genParams: Option[GeneratorParams] = None): Props =
