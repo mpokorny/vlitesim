@@ -98,6 +98,8 @@ final class Emulator(
 
   def receive: Receive = 
     getExpectedFrameRate orElse getBufferCount orElse {
+      case start: Controller.SyncFramesTo =>
+        generators foreach { g => g ! start }
       case Transporter.OpenException(msg) =>
         log.error(msg)
       case Transporter.OpenWarning(msg) =>

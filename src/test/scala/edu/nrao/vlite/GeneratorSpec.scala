@@ -24,6 +24,7 @@ import akka.util.{ ByteString, Timeout }
 import scala.concurrent.duration._
 import org.scalatest._
 import java.io.FileOutputStream
+import org.joda.time.{ DateTime, DateTimeZone }
 
 class GeneratorSpec(_system: ActorSystem)
     extends TestKit(_system)
@@ -70,10 +71,8 @@ class GeneratorSpec(_system: ActorSystem)
   object VLITEConfigSimData extends VLITEConfigSimData {
     val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
-    implicit val timeout = Timeout(1, SECONDS)
     val bufferSize = 2
     lazy val actorRefFactory = system
-    implicit lazy val executionContext = system.dispatcher
   }
 
   val fileStationID = 4
@@ -84,10 +83,8 @@ class GeneratorSpec(_system: ActorSystem)
     val readBufferSize = fileParams.readBufferSize
     val file = fileParams.file(fileStationID, fileThreadID)
     val dataArraySize = arraySize
-    implicit val timeout = Timeout(1, SECONDS)
     val bufferSize = 2
     lazy val actorRefFactory = system
-    implicit lazy val executionContext = system.dispatcher
   }
 
   val PipelinePorts(_, evtPipeSim, _) =
@@ -99,7 +96,7 @@ class GeneratorSpec(_system: ActorSystem)
     decimation: Int = decimation,
     simData: Boolean = false,
     fileData: Boolean = false) = {
-    system.actorOf(Generator.props(
+    val result = system.actorOf(Generator.props(
       threadID,
       stationID,
       transporter.get,
@@ -109,6 +106,9 @@ class GeneratorSpec(_system: ActorSystem)
         if (simData) Some(simParams)
         else if (fileData) Some(fileParams)
         else None))
+    result ! Controller.SyncFramesTo(
+      DateTime.now(DateTimeZone.UTC).plusSeconds(1).withMillisOfSecond(0))
+    result
   }
 
   def tossFrames(duration: Duration) {
@@ -126,23 +126,22 @@ class GeneratorSpec(_system: ActorSystem)
   it should "not generate frames after stop" in {
     import system._
     val generator = testGenerator(0, 0)
-    scheduler.scheduleOnce(1.seconds, generator, PoisonPill)
-    receiveWhile(1500.millis) {
-      case _: GeneratorSpec.Packet => true
-    }
+    scheduler.scheduleOnce(3.seconds, generator, PoisonPill)
+    tossFrames(3500.millis)
     expectNoMsg
   }
 
   it should "generate frames at the desired rate" in {
     import system._
     val generator = testGenerator(0, 0)
-    tossFrames(2.seconds)
-    scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
-    val frames = receiveWhile(6.seconds) {
+    tossFrames(3.seconds)
+    scheduler.scheduleOnce(4.seconds, generator, PoisonPill)
+    val frames = receiveWhile(5.seconds) {
       case _: GeneratorSpec.Packet => true
     }
-    frames.length should === (
-      5 * VLITEConfigZeroData.framesPerSec / decimation +- 50)
+    val expectedNumber = 4 * VLITEConfigSimData.framesPerSec / decimation
+    val tolerance = expectedNumber / 100
+    frames.length should === (expectedNumber +- tolerance)
   }
 
   it should "generate frames with the provided threadID and stationID" in {

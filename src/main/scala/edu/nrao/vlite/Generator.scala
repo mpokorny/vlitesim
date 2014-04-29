@@ -87,55 +87,58 @@ abstract class Generator(
     stream = None
   }
 
+  def requestFrames(sec: Int, count: Int) {
+    val decCount = count / decimation
+    val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
+      (decCount - numberWithinSec))
+    VLITEConfig.dataArray(numFrames)
+    val timestamps = (0 until numFrames) map { _ =>
+      val timestamp = (secFromRefEpoch, numberWithinSec)
+      incNumberWithinSec()
+      timestamp
+    }
+    pendingTimestamps ++= timestamps
+  }
+
   def getExpectedFrameRate: Receive = {
     case Generator.GetExpectedFrameRate =>
       sender ! Generator.ExpectedFrameRate(framesPerSec)
   }
 
-  def genFramesOnce() {
-    val (sec, count) = Generator.timeFromRefEpoch
-    secFromRefEpoch = sec
-    numberWithinSec = count / decimation
-    stream =
-      Some(system.scheduler.scheduleOnce(pace, self, Generator.GenFrames))
-  }
+  def receive = synchronize
 
-  def receive = {
-    stream =
-      Some(system.scheduler.scheduleOnce(1.second, self, Generator.GenFrames))
-    starting
-  }
-
-  def starting: Receive = getExpectedFrameRate orElse {
-    case Generator.GenFrames =>
-      val (sec, count) = Generator.timeFromRefEpoch
-      secFromRefEpoch = sec
-      numberWithinSec = count / decimation
+  def synchronize: Receive = getExpectedFrameRate orElse {
+    case Controller.SyncFramesTo(time) =>
+      val syncSec =
+        new JodaDuration(Generator.referenceEpoch, time).getStandardSeconds.toInt
       stream =
         Some(system.scheduler.schedule(pace, pace, self, Generator.GenFrames))
-      become(running)
+      become(waitForStart(syncSec))
+  }
+
+  def waitForStart(syncSec: Int): Receive = getExpectedFrameRate orElse {
+    case Generator.GenFrames =>
+      val (sec, count) = Generator.timeFromRefEpoch
+      if (sec >= syncSec) {
+        secFromRefEpoch = sec
+        numberWithinSec = 0
+        requestFrames(sec, count)
+        become(running)
+      }
   }
 
   def running: Receive = getExpectedFrameRate orElse {
     case Generator.GenFrames =>
       val (sec, count) = Generator.timeFromRefEpoch
-      val decCount = count / decimation
-      val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
-        (decCount - numberWithinSec))
-      VLITEConfig.dataArray(numFrames)
-      val timestamps = (0 until numFrames) map { _ =>
-        val timestamp = (secFromRefEpoch, numberWithinSec)
-        incNumberWithinSec()
-        timestamp
-      }
-      pendingTimestamps ++= timestamps
-    case ValueSource.Values(vs: Vector[ByteString]) =>
+      requestFrames(sec, count)
+    case ValueSource.Values(vs) =>
       if (vs.length > 0) {
         pendingTimestamps splitAt vs.length match {
           case (nextTs, remTs) =>
             transporter ! Transporter.Transport(
               vs zip nextTs map {
-                case (dat, (sec, num)) => nextFrame(dat, sec, num)
+                case (dat, (sec, num)) =>
+                  nextFrame(dat.asInstanceOf[ByteString], sec, num)
               })
             pendingTimestamps = remTs
         }

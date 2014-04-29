@@ -24,6 +24,7 @@ import akka.remote.RemoteScope
 import scala.concurrent.duration._
 import scala.concurrent.Future
 import scala.util.{ Success, Failure }
+import org.joda.time.{ DateTime, DateTimeZone }
 
 class Controller extends Actor with ActorLogging {
   import context._
@@ -107,16 +108,14 @@ class Controller extends Actor with ActorLogging {
 
   override def preStart() {
     log.info(s"Start ${self.path}")
-    system.scheduler.schedule(
-      1.second,
-      1.second,
-      self,
-      GetBufferCounts
-    )
     getExpectedFrameRates
   }
 
-  def receive: Receive = {
+  val syncSeconds = 2
+
+  def receive = preSync
+
+  def handleBufferCounts: Receive = {
     case GetBufferCounts =>
       Future.traverse(emulators) { em =>
         (em.actorRef ? Transporter.GetBufferCount) map {
@@ -137,12 +136,33 @@ class Controller extends Actor with ActorLogging {
         }
         recentBufferCounts = recentBufferCounts.tail
       }
+  }
+
+  def preSync: Receive = handleBufferCounts orElse {
     case ExpectedFrameRates(rates) =>
       expectedFrameRates = Some(rates)
       log.info("ExpectedFrameRates({})", rates.mkString(","))
+      val start = Controller.SyncFramesTo(
+        DateTime.now(DateTimeZone.UTC).plusSeconds(syncSeconds).
+          withMillisOfSecond(0))
+      emulators foreach { em => em.actorRef ! start }
+      become(running)
+  }
+
+  def running: Receive = {
+    system.scheduler.schedule(
+      Duration(syncSeconds, SECONDS),
+      1.second,
+      self,
+      GetBufferCounts)
+    handleBufferCounts
   }
 }
 
 case class EmulatorInfo(
   instance: EmulatorInstance,
   actorRef: ActorRef)
+
+object Controller {
+  case class SyncFramesTo(time: DateTime)
+}
