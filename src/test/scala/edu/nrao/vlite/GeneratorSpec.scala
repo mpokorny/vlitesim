@@ -55,6 +55,8 @@ class GeneratorSpec(_system: ActorSystem)
 
   val decimation = 100
 
+  val pace = 10.millis
+
   object VLITEConfigZeroData extends VLITEConfigZeroData {
     implicit val executionContext = system.dispatcher
     val dataArraySize = arraySize
@@ -94,6 +96,8 @@ class GeneratorSpec(_system: ActorSystem)
     threadID: Int,
     stationID: Int,
     decimation: Int = decimation,
+    pace: FiniteDuration = pace,
+    syncOffset: Int = 1,
     simData: Boolean = false,
     fileData: Boolean = false) = {
     val result = system.actorOf(Generator.props(
@@ -101,13 +105,15 @@ class GeneratorSpec(_system: ActorSystem)
       stationID,
       transporter.get,
       decimation = decimation,
+      pace = pace,
       arraySize = arraySize,
       genParams =
         if (simData) Some(simParams)
         else if (fileData) Some(fileParams)
         else None))
     result ! Controller.SyncFramesTo(
-      DateTime.now(DateTimeZone.UTC).plusSeconds(1).withMillisOfSecond(0))
+      DateTime.now(DateTimeZone.UTC).plusSeconds(syncOffset).
+        withMillisOfSecond(0))
     result
   }
 
@@ -232,6 +238,37 @@ class GeneratorSpec(_system: ActorSystem)
     } finally {
       file.delete()
     }
+  }
+
+  it should "deliver synchronized frames" in {
+    import system._
+    val generators = for (i <- 0 until 4) yield {
+      testGenerator(1, i, syncOffset = 2)
+    }
+    scheduler.scheduleOnce(4.seconds)(generators foreach (_ ! PoisonPill))
+    val frames = receiveWhile(5.seconds) {
+      case GeneratorSpec.Packet(bs) => bs
+    }
+    val frameHeaders = frames map { f => evtPipeSim(f)._1.head.header }
+    for (i <- 0 until 4)
+      (frameHeaders exists (_.stationID == i)) shouldBe true
+    val framesPerSec = VLITEConfigSimData.framesPerSec / decimation
+    val numTolerance = (10 * framesPerSec) / (1.second / pace)
+    val closeNums =
+      frameHeaders match {
+        case first +: rest =>
+          ((true, first.secFromRefEpoch, first.numberWithinSec) /: rest) {
+            case ((true, sec, num), hdr) =>
+              val diff = ((sec - hdr.secFromRefEpoch) * framesPerSec +
+                num - hdr.numberWithinSec).abs
+              (diff <= numTolerance, hdr.secFromRefEpoch, hdr.numberWithinSec)
+            case (acc, _) =>
+              acc
+          } match {
+            case (result, _, _) => result
+          }
+      }
+    closeNums shouldBe true
   }
 }
 
