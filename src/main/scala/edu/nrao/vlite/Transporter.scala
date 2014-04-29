@@ -28,7 +28,7 @@ import java.net.{ InetAddress, Inet4Address, InetSocketAddress }
 import java.nio.ByteOrder
 
 object Transporter {
-  case class Transport(byteStrings: Vector[Future[ByteString]])
+  case class Transport(byteStrings: Vector[ByteString])
   case object GetBufferCount
   case class BufferCount(count: Long)
   case class OpenWarning(message: String)
@@ -42,32 +42,11 @@ abstract class ByteStringsSender extends Actor with ActorLogging {
 
   protected def send(byteString: ByteString): Boolean
 
-  var bsQueue: Vector[Future[ByteString]] = Vector.empty
-
-  case object SendNext
-
   def receive: Receive = {
-    case Transporter.Transport(futureByteStrings) =>
-      if (futureByteStrings.length > 0) {
-        if (bsQueue.isEmpty) self ! SendNext
-        bsQueue ++= futureByteStrings
+    case Transporter.Transport(byteStrings) =>
+      byteStrings foreach { bs =>
+        if (send(bs)) parent ! IncrementBufferCount
       }
-    case SendNext =>
-      bsQueue match {
-        case (head +: tail) =>
-          bsQueue = tail
-          val haveNext = !bsQueue.isEmpty
-          val prt = parent
-          head onComplete {
-            case Success(bs) =>
-              if (send(bs)) prt ! IncrementBufferCount
-              if (haveNext) self ! SendNext
-            case f @ Failure(_) =>
-              self ! f
-          }
-      }
-    case Failure(th) =>
-      throw th
   }
 }
 

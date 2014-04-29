@@ -24,6 +24,7 @@ import akka.pattern.ask
 import akka.util.{ ByteString, Timeout }
 import akka.io.{ SymmetricPipelineStage, SymmetricPipePair, PipelineContext }
 import java.nio.ByteOrder.LITTLE_ENDIAN
+import java.io.File
 
 final class VLITEHeader(
   val isInvalidData: Boolean,
@@ -122,7 +123,7 @@ object VLITEHeader {
 trait VLITEConfig extends PipelineContext {
   val dataArraySize: Int
 
-  def dataArray: Future[ByteString]
+  def dataArray(n: Int)(implicit sender: ActorRef): Unit
 
   val samplesPerSec = 128 * 1000000
 
@@ -254,16 +255,16 @@ object VLITEStage
 }
 
 trait VLITEConfigZeroData extends VLITEConfig {
-  implicit val executionContext: ExecutionContext
-
   lazy val zeroDataArray = {
     val bldr = ByteString.newBuilder
     bldr.sizeHint(dataArraySize)
     (1 to dataArraySize) foreach (_ => bldr.putByte(0.toByte))
-    Future(bldr.result)
+    bldr.result
   }
 
-  def dataArray = zeroDataArray
+  def dataArray(n: Int)(implicit sender: ActorRef) {
+    sender ! ValueSource.Values(Vector.fill(n)(zeroDataArray))
+  }
 }
 
 trait VLITEConfigSimData extends VLITEConfig {
@@ -290,20 +291,29 @@ trait VLITEConfigSimData extends VLITEConfig {
       bufferSize),
     "bytestrings")
 
-  implicit val timeout: Timeout
+  def dataArray(n: Int)(implicit sender: ActorRef) {
+    bsActor ! ValueSource.Get(n)
+  }
+}
 
-  implicit val executionContext: ExecutionContext
+trait VLITEConfigFileData extends VLITEConfig {
 
-  def nextRequest(implicit timeout: Timeout): Future[ByteString] =
-    (bsActor ? ValueSource.Get(1)) map {
-      case ValueSource.Values(bss) => bss(0).asInstanceOf[ByteString]
-    }
+  val actorRefFactory: ActorRefFactory
 
-  var nextValue: Option[Future[ByteString]] = None
+  val bufferSize: Int
 
-  def dataArray = {
-    val nv = nextValue.getOrElse(nextRequest)
-    nextValue = Some(nextRequest)
-    nv
+  val file: File
+
+  val readBufferSize: Int
+
+  lazy val bsActor = actorRefFactory.actorOf(
+    ByteStringSource.props(
+      FileByteSource.props(file, readBufferSize),
+      dataArraySize,
+      bufferSize),
+    "bytestrings")
+
+  def dataArray(n: Int)(implicit sender: ActorRef) {
+    bsActor ! ValueSource.Get(n)
   }
 }

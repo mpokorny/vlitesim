@@ -23,6 +23,7 @@ import org.joda.time.{ DateTime, DateTimeZone, Duration => JodaDuration }
 import akka.actor._
 import akka.io.{ PipelineFactory, PipelinePorts }
 import akka.util.{ ByteString, Timeout }
+import java.io.File
 
 abstract class Generator(
   val threadID: Int,
@@ -40,6 +41,8 @@ abstract class Generator(
   protected var numberWithinSec: Int = 0
   protected var stream: Option[Cancellable] = None
 
+  protected var pendingTimestamps: Vector[(Int, Int)] = Vector.empty
+
   val framesPerSec = VLITEConfig.framesPerSec / decimation
   // TODO: make durationPerFrame a sequence for dithering error from using
   // integer division? Probably not worth it given the accuracy of the
@@ -49,7 +52,10 @@ abstract class Generator(
   val PipelinePorts(vlitePipeline, _, _) =
     PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
 
-  protected def nextFrame: Future[ByteString] = {
+  protected def nextFrame(
+    dataArray: ByteString,
+    secFromRefEpoch: Int,
+    numberWithinSec: Int): ByteString = {
     val header = VLITEHeader(
       isInvalidData = false,
       secFromRefEpoch = secFromRefEpoch,
@@ -57,11 +63,8 @@ abstract class Generator(
       numberWithinSec = numberWithinSec,
       threadID = threadID,
       stationID = stationID)
-    incNumberWithinSec()
-    VLITEConfig.dataArray map { dataArray =>
-      val (_, result) = vlitePipeline(VLITEFrame(header, dataArray))
-      result.head
-    }
+    val (_, result) = vlitePipeline(VLITEFrame(header, dataArray))
+    result.head
   }
 
   protected def incNumberWithinSec() {
@@ -77,8 +80,6 @@ abstract class Generator(
       1 <= decimation && decimation <= VLITEConfig.framesPerSec,
       s"Invalid frame rate decimation factor: must be between 1 and ${VLITEConfig.framesPerSec}"
     )
-    stream =
-      Some(system.scheduler.scheduleOnce(1.second, self, Generator.GenFrames))
   }
 
   override def postStop() {
@@ -99,43 +100,46 @@ abstract class Generator(
       Some(system.scheduler.scheduleOnce(pace, self, Generator.GenFrames))
   }
 
-  def receive = starting
+  def receive = {
+    stream =
+      Some(system.scheduler.scheduleOnce(1.second, self, Generator.GenFrames))
+    starting
+  }
 
   def starting: Receive = getExpectedFrameRate orElse {
     case Generator.GenFrames =>
-      genFramesOnce()
-      become(priming)
-  }
-
-  def priming: Receive = getExpectedFrameRate orElse {
-    case Generator.GenFrames => {
       val (sec, count) = Generator.timeFromRefEpoch
-      val decCount = count / decimation
-      val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
-        (decCount - numberWithinSec))
-      if (numFrames > 0 &&
-        Await.result(
-          Future.traverse((0 until numFrames).toVector)(_ => nextFrame).
-            map(_ => true).recover { case _ => false },
-          Duration.Inf)) {
-        stream =
-          Some(system.scheduler.schedule(pace, pace, self, Generator.GenFrames))
-        become(running)
-      } else {
-        genFramesOnce()
-      }
-    }
+      secFromRefEpoch = sec
+      numberWithinSec = count / decimation
+      stream =
+        Some(system.scheduler.schedule(pace, pace, self, Generator.GenFrames))
+      become(running)
   }
 
   def running: Receive = getExpectedFrameRate orElse {
-    case Generator.GenFrames => {
+    case Generator.GenFrames =>
       val (sec, count) = Generator.timeFromRefEpoch
       val decCount = count / decimation
       val numFrames = ((sec - secFromRefEpoch) * framesPerSec +
         (decCount - numberWithinSec))
-      if (numFrames > 0)
-        transporter ! Transporter.Transport(Vector.fill(numFrames)(nextFrame))
-    }
+      VLITEConfig.dataArray(numFrames)
+      val timestamps = (0 until numFrames) map { _ =>
+        val timestamp = (secFromRefEpoch, numberWithinSec)
+        incNumberWithinSec()
+        timestamp
+      }
+      pendingTimestamps ++= timestamps
+    case ValueSource.Values(vs: Vector[ByteString]) =>
+      if (vs.length > 0) {
+        pendingTimestamps splitAt vs.length match {
+          case (nextTs, remTs) =>
+            transporter ! Transporter.Transport(
+              vs zip nextTs map {
+                case (dat, (sec, num)) => nextFrame(dat, sec, num)
+              })
+            pendingTimestamps = remTs
+        }
+      }
   }
 }
 
@@ -150,17 +154,17 @@ final class ZeroGenerator(
   gen =>
 
   implicit object VLITEConfig extends VLITEConfigZeroData {
-    implicit val executionContext = gen.context.dispatcher
-
     val dataArraySize = arraySize
   }
 }
+
+trait GeneratorParams
 
 final case class SimParams(
   seed: Long,
   filter: Vector[Double],
   scale: Double,
-  offset: Long)
+  offset: Long) extends GeneratorParams
 
 final class SimdataGenerator(
   threadID: Int,
@@ -177,11 +181,39 @@ final class SimdataGenerator(
     val SimParams(seed, filter, scale, offset) = simParams
     val dataArraySize = arraySize
     lazy val actorRefFactory = gen.context
-    implicit lazy val executionContext = gen.context.dispatcher
-    implicit lazy val timeout = Timeout(10 * gen.durationPerFrame)
     private def ceil(n: Int, d: Int) =
       (n + (d - n % d) % d) / d
     def bufferSize = 2 * ceil(gen.framesPerSec, (1.second / pace).toInt)
+  }
+}
+
+final case class FileParams(
+  val readBufferSize: Int,
+  val fileNamePattern: String) extends GeneratorParams {
+  def file(threadID: Int, stationID: Int): File = {
+    new File(
+      fileNamePattern.replaceAll("@THREAD@", threadID.toString).
+        replaceAll("@STATION@", "%02d" format stationID))
+  }
+}
+
+final class FiledataGenerator(
+  threadID: Int,
+  stationID: Int,
+  transporter: ActorRef,
+  pace: FiniteDuration,
+  decimation: Int,
+  arraySize: Int,
+  fileParams: FileParams)
+    extends Generator(threadID, stationID, transporter, pace, decimation) {
+  gen =>
+
+  implicit object VLITEConfig extends VLITEConfigFileData {
+    val file = fileParams.file(threadID, stationID)
+    val readBufferSize = fileParams.readBufferSize
+    val dataArraySize = arraySize
+    lazy val actorRefFactory = gen.context
+    val bufferSize = 2
   }
 }
 
@@ -193,17 +225,30 @@ object Generator {
     pace: FiniteDuration = 1.millis,
     decimation: Int = 1,
     arraySize: Int = 5000,
-    simParams: Option[SimParams] = None): Props =
-    if (simParams.isDefined)
-      Props(
-        classOf[SimdataGenerator],
-        threadID,
-        stationID,
-        transporter,
-        pace,
-        decimation,
-        arraySize,
-        simParams.get)
+    genParams: Option[GeneratorParams] = None): Props =
+    if (genParams.isDefined)
+      genParams.get match {
+        case s: SimParams =>
+          Props(
+            classOf[SimdataGenerator],
+            threadID,
+            stationID,
+            transporter,
+            pace,
+            decimation,
+            arraySize,
+            s)
+        case f: FileParams =>
+          Props(
+            classOf[FiledataGenerator],
+            threadID,
+            stationID,
+            transporter,
+            pace,
+            decimation,
+            arraySize,
+            f)
+      }
     else
       Props(
         classOf[ZeroGenerator],
