@@ -18,6 +18,8 @@
 package edu.nrao.vlite
 
 import akka.actor._
+import java.io.{ File, FileInputStream }
+import java.nio.ByteBuffer
 
 abstract class ValueSourceBase[V] extends Actor {
 
@@ -122,6 +124,68 @@ class ValueSource[V](sourceProps: Props, val bufferSize: Int)
     as.asInstanceOf[Vector[V]]
 }
 
+private class FileByteGetter(file: File, readBufferSize: Int) extends Actor {
+  import context._
+
+  val channel = new FileInputStream(file).getChannel
+
+  val buffer = ByteBuffer.allocate(readBufferSize)
+
+  override def postStop() {
+    channel.close()
+  }
+
+  def fillBuffer() {
+    buffer.clear()
+    while (buffer.position < buffer.limit) {
+      if (channel.size == channel.position) channel.position(0)
+      channel.read(buffer)
+    }
+    buffer.position(0)
+  }
+
+  def get(acc: Vector[Byte], n: Int): Vector[Byte] = {
+    if (n == 0) acc
+    else {
+      if (buffer.limit == buffer.position) fillBuffer()
+      val take = n min (buffer.limit - buffer.position)
+      val v = Vector(
+        buffer.array.slice(
+          buffer.position,
+          buffer.position + take):_*)
+      buffer.position(buffer.position + take)
+      get(acc ++ v, n - take)
+    }
+  }
+
+  fillBuffer()
+
+  def receive: Receive = {
+    case ValueSource.Get(n) =>
+      sender ! ValueSource.Values(get(Vector.empty, n))
+  }
+}
+
+class FileByteSource(
+  val file: File,
+  val readBufferSize: Int,
+  val bufferSize: Int)
+    extends ValueSourceBase[Byte] {
+
+  val getter = context.actorOf(
+    Props(classOf[FileByteGetter], file, readBufferSize),
+    "getter")
+
+  val valueRatio = (1, 1)
+
+  def requestValues(n: Int) {
+    getter ! ValueSource.Get(n)
+  }
+
+  def receiveValues(as: Vector[Any]): Vector[Byte] =
+    as.asInstanceOf[Vector[Byte]]
+}
+
 object ValueSource {
   def props[V](generate: () => V, bufferSize: Int): Props =
     props(Props(classOf[Getter[V]], generate), bufferSize)
@@ -140,4 +204,9 @@ object ValueSource {
         sender ! ValueSource.Values((0 until n).toVector map (_ => generate()))
     }
   }
+}
+
+object FileByteSource {
+  def props(file: File, readBufferSize: Int, bufferSize: Int = 1): Props =
+    Props(classOf[FileByteSource], file, readBufferSize, bufferSize)
 }
