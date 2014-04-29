@@ -62,7 +62,7 @@ abstract class ValueSourceBase[V] extends Actor {
       case Vector() =>
         requestFullBuffer()
       case (actor, numValues) +: ps =>
-        if (buffer.length > numValues) {
+        if (buffer.length >= numValues) {
           pendingGets = ps
           fulfillRequest(actor, numValues)
           sendToPendingGets()
