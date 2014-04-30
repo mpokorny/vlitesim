@@ -94,10 +94,7 @@ class SettingsImpl(config: Config) extends Extension {
           }
         EmulatorInstance(
           hostname = hostname,
-          stationID =
-            instanceConf.getString("stationID").getBytes.take(2) match {
-              case Array(first, second) => (first.toInt << 8) + second.toInt
-            },
+          stationID = instanceConf.getInt("stationID"),
           threadIDs = instanceConf.getIntList("threadIDs").toList.map(_.toInt),
           pace = instanceConf.getDuration("pace", MILLISECONDS).millis,
           transport = transport,
