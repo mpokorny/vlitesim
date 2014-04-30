@@ -40,10 +40,6 @@ final class Emulator(
 
   import context._
 
-  override val supervisorStrategy = AllForOneStrategy(maxNrOfRetries = -1) {
-    case _: AskTimeoutException => SupervisorStrategy.Restart
-  }
-
   val transporter = {
     val dstSock =
       (Try {
