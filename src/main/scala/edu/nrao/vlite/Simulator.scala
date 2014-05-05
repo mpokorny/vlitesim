@@ -23,7 +23,7 @@ import com.typesafe.config.ConfigFactory
 
 class Simulator extends Bootable {
 
-  val version = "1.2"
+  val version = "1.3"
 
   val system = ActorSystem("vlite", ConfigFactory.load.getConfig("vlite"))
 
