@@ -21,7 +21,7 @@ import akka.actor._
 import akka.util.Timeout
 import akka.pattern.{ ask, pipe, AskTimeoutException }
 import scala.concurrent.duration._
-import scala.concurrent.Future
+import scala.concurrent.{ Future, Await }
 import scala.util.Try
 import java.net.InetSocketAddress
 
@@ -62,7 +62,7 @@ final class Emulator(
     }
   }
 
-  val generators = sourceIDs map {
+  var generators = sourceIDs map {
     case (stationID, threadID) =>
       val gp = genParams.map {
         case SimParams(seed, filter, scale, offset) =>
@@ -86,7 +86,15 @@ final class Emulator(
         s"generator-$stationID-$threadID")
   }
 
-  protected implicit val queryTimeout = Timeout(2.seconds)
+  protected implicit val queryTimeout = Timeout(1.seconds)
+
+  def queryExpectedFrameRate = {
+    Future.traverse(generators) { g =>
+      (g ? Generator.GetExpectedFrameRate) map {
+        case Generator.ExpectedFrameRate(rate) => rate
+      }
+    } map { rates => Emulator.ExpectedFrameRate(rates.sum) }
+  }
 
   override def preStart() {
     log.info(s"Start ${self.path}")
@@ -100,15 +108,13 @@ final class Emulator(
         log.error(msg)
       case Transporter.OpenWarning(msg) =>
         log.warning(msg)
+      case Generator.EndOfStream =>
+        parent ! Emulator.EndOfStream
     }
 
   def getExpectedFrameRate: Receive = {
     case Emulator.GetExpectedFrameRate =>
-      Future.traverse(generators) { g =>
-        (g ? Generator.GetExpectedFrameRate) map {
-          case Generator.ExpectedFrameRate(rate) => rate
-        }
-      } map { rates => Emulator.ExpectedFrameRate(rates.sum) } pipeTo sender
+      queryExpectedFrameRate pipeTo sender
   }
 
   def getBufferCount: Receive = {
@@ -151,6 +157,7 @@ object Emulator {
 
   case object GetExpectedFrameRate
   case class ExpectedFrameRate(framesPerSec: Int)
+  case object EndOfStream
 
   object Transport extends Enumeration {
     type Transport = Value

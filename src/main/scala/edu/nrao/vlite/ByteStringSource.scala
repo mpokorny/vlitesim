@@ -31,14 +31,15 @@ class ByteStringSource(
   val byteSource = actorOf(byteSourceProps, "byteSource")
 
   val valueRatio = (length, 1)
-  
+
   def requestValues(n: Int) {
     byteSource ! ValueSource.Get(n)
   }
 
   var currentBuilder: Option[ByteStringBuilder] = None
 
-  def builder(optBuilder: Option[ByteStringBuilder]): Option[ByteStringBuilder] = {
+  def builder(optBuilder: Option[ByteStringBuilder]):
+      Option[ByteStringBuilder] = {
     if (!optBuilder.isDefined) {
       val b = ByteString.newBuilder
       b.sizeHint(length)

@@ -90,7 +90,8 @@ class SettingsImpl(config: Config) extends Extension {
                 instanceConf.getObject("file-array-data-params").toConfig
               Some(FileParams(
                 readBufferSize = params.getInt("read-buffer-size"),
-                fileNamePattern = params.getString("file-name-pattern")))
+                fileNamePattern = params.getString("file-name-pattern"),
+                cycleData = params.getBoolean("cycle-data")))
           }
         EmulatorInstance(
           hostname = hostname,

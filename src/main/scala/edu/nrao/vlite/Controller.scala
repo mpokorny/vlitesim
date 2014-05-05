@@ -150,12 +150,16 @@ class Controller extends Actor with ActorLogging {
   }
 
   def running: Receive = {
-    system.scheduler.schedule(
+    val getBufferCounts = system.scheduler.schedule(
       Duration(syncSeconds, SECONDS),
       1.second,
       self,
       GetBufferCounts)
-    handleBufferCounts
+    handleBufferCounts orElse {
+      case Emulator.EndOfStream =>
+        getBufferCounts.cancel
+        stop(self)
+    }
   }
 }
 

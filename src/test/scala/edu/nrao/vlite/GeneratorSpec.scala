@@ -57,40 +57,23 @@ class GeneratorSpec(_system: ActorSystem)
 
   val pace = 10.millis
 
-  object VLITEConfigZeroData extends VLITEConfigZeroData {
-    implicit val executionContext = system.dispatcher
+  object VLITEConfig extends VLITEConfigZeroData {
     val dataArraySize = arraySize
   }
 
-  val PipelinePorts(_, evtPipeZero, _) =
-    PipelineFactory.buildFunctionTriple(VLITEConfigZeroData, VLITEStage)
+  val PipelinePorts(_, evtPipe, _) =
+    PipelineFactory.buildFunctionTriple(VLITEConfig, VLITEStage)
 
   val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128)
 
-  val fileParams =
-    FileParams(2 * arraySize, "/tmp/test_@STATION@_@THREAD@.dat")
-
-  object VLITEConfigSimData extends VLITEConfigSimData {
-    val SimParams(seed, filter, scale, offset) = simParams
-    val dataArraySize = arraySize
-    val bufferSize = 2
-    lazy val actorRefFactory = system
-  }
+  val fileParams = Map(
+    true -> FileParams(2 * arraySize, "/tmp/test_@STATION@_@THREAD@.dat", true),
+    false -> FileParams(2 * arraySize, "/tmp/test_@STATION@_@THREAD@.dat", false)
+  )
 
   val fileStationID = 4
 
   val fileThreadID = 0
-
-  object VLITEConfigFileData extends VLITEConfigFileData {
-    val readBufferSize = fileParams.readBufferSize
-    val file = fileParams.file(fileStationID, fileThreadID)
-    val dataArraySize = arraySize
-    val bufferSize = 2
-    lazy val actorRefFactory = system
-  }
-
-  val PipelinePorts(_, evtPipeSim, _) =
-    PipelineFactory.buildFunctionTriple(VLITEConfigSimData, VLITEStage)
 
   def testGenerator(
     threadID: Int,
@@ -98,8 +81,7 @@ class GeneratorSpec(_system: ActorSystem)
     decimation: Int = decimation,
     pace: FiniteDuration = pace,
     syncOffset: Int = 1,
-    simData: Boolean = false,
-    fileData: Boolean = false) = {
+    genParams: Option[GeneratorParams] = None) = {
     val result = system.actorOf(Generator.props(
       threadID,
       stationID,
@@ -107,10 +89,7 @@ class GeneratorSpec(_system: ActorSystem)
       decimation = decimation,
       pace = pace,
       arraySize = arraySize,
-      genParams =
-        if (simData) Some(simParams)
-        else if (fileData) Some(fileParams)
-        else None))
+      genParams = genParams))
     result ! Controller.SyncFramesTo(
       DateTime.now(DateTimeZone.UTC).plusSeconds(syncOffset).
         withMillisOfSecond(0))
@@ -145,7 +124,7 @@ class GeneratorSpec(_system: ActorSystem)
     val frames = receiveWhile(5.seconds) {
       case _: GeneratorSpec.Packet => true
     }
-    val expectedNumber = 4 * VLITEConfigSimData.framesPerSec / decimation
+    val expectedNumber = 4 * VLITEConfig.framesPerSec / decimation
     val tolerance = expectedNumber / 100
     frames.length should === (expectedNumber +- tolerance)
   }
@@ -157,7 +136,7 @@ class GeneratorSpec(_system: ActorSystem)
     val generator = testGenerator(threadID, stationID)
     val packet = expectMsgClass(classOf[GeneratorSpec.Packet])
     generator ! PoisonPill
-    val frame = evtPipeZero(packet.byteString)._1.head
+    val frame = evtPipe(packet.byteString)._1.head
     frame.header.threadID should === (threadID)
     frame.header.stationID should === (stationID)
   }
@@ -165,40 +144,41 @@ class GeneratorSpec(_system: ActorSystem)
   it should "generate simulated frames upon request" in {
     import system._
     val decimation = 512
-    val generator = testGenerator(0, 0, decimation = decimation, simData = true)
+    val generator =
+      testGenerator(0, 0, decimation = decimation, genParams = Some(simParams))
     tossFrames(2.seconds)
     scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
     val frames = receiveWhile(6.seconds) {
       case GeneratorSpec.Packet(bs) => bs
     }
     val dataFrames = frames map { f =>
-      evtPipeSim(f)._1.head
+      evtPipe(f)._1.head
     }
-    // val expectedNumber = 5 * VLITEConfigSimData.framesPerSec / decimation
+    // val expectedNumber = 5 * VLITEConfig.framesPerSec / decimation
     // val tolerance = expectedNumber / 100
     dataFrames.length should be > 0
   }
 
   it should "generate frames from file data upon request" in {
     import system._
-    val file = fileParams.file(fileStationID, fileThreadID)
+    val file = fileParams(true).file(fileStationID, fileThreadID)
     val f = new FileOutputStream(file)
-    f.write(((0 until fileParams.readBufferSize) map (_.toByte)).toArray)
+    f.write(((0 until fileParams(true).readBufferSize) map (_.toByte)).toArray)
     f.close()
     try {
       val generator = testGenerator(
         fileStationID,
         fileThreadID,
-        fileData = true)
+        genParams = Some(fileParams(true)))
       tossFrames(2.seconds)
       scheduler.scheduleOnce(5.seconds, generator, PoisonPill)
       val frames = receiveWhile(6.seconds) {
         case GeneratorSpec.Packet(bs) => bs
       }
       val dataFrames = frames map { f =>
-        evtPipeSim(f)._1.head
+        evtPipe(f)._1.head
       }
-      // val expectedNumber = 5 * VLITEConfigSimData.framesPerSec / decimation
+      // val expectedNumber = 5 * VLITEConfig.framesPerSec / decimation
       // val tolerance = expectedNumber / 100
       dataFrames.length should be > 0
     } finally {
@@ -208,21 +188,21 @@ class GeneratorSpec(_system: ActorSystem)
 
   it should "generate frames from file with expected data" in {
     import system._
-    val file = fileParams.file(fileStationID, fileThreadID)
+    val file = fileParams(true).file(fileStationID, fileThreadID)
     val f = new FileOutputStream(file)
-    f.write(((0 until fileParams.readBufferSize) map (_.toByte)).toArray)
+    f.write(((0 until fileParams(true).readBufferSize) map (_.toByte)).toArray)
     f.close()
     val decimation = 5120
     try {
       val generator = testGenerator(
         fileStationID,
         fileThreadID,
-        fileData = true)
+        genParams = Some(fileParams(true)))
       scheduler.scheduleOnce(4.seconds, generator, PoisonPill)
       val frames = receiveWhile(5.seconds) {
         case GeneratorSpec.Packet(bs) => bs
       }
-      val dataFrames = frames map { f => evtPipeSim(f)._1.head }
+      val dataFrames = frames map { f => evtPipe(f)._1.head }
       def dataArray(i: Int) = {
         val result = new Array[Byte](dataFrames(i).dataArray.length)
         dataFrames(i).dataArray.asByteBuffer.get(result)
@@ -230,7 +210,7 @@ class GeneratorSpec(_system: ActorSystem)
       }
       def expectedArray(i: Int) = {
         ((i * arraySize) until ((i + 1) * arraySize)) map { n =>
-          (n % fileParams.readBufferSize).toByte
+          (n % fileParams(true).readBufferSize).toByte
         }
       }
       for (i <- 0 until dataFrames.length)
@@ -249,10 +229,10 @@ class GeneratorSpec(_system: ActorSystem)
     val frames = receiveWhile(5.seconds) {
       case GeneratorSpec.Packet(bs) => bs
     }
-    val frameHeaders = frames map { f => evtPipeSim(f)._1.head.header }
+    val frameHeaders = frames map { f => evtPipe(f)._1.head.header }
     for (i <- 0 until 4)
       (frameHeaders exists (_.stationID == i)) shouldBe true
-    val framesPerSec = VLITEConfigSimData.framesPerSec / decimation
+    val framesPerSec = VLITEConfig.framesPerSec / decimation
     val numTolerance = (10 * framesPerSec) / (1.second / pace)
     val closeNums =
       frameHeaders match {
@@ -269,6 +249,28 @@ class GeneratorSpec(_system: ActorSystem)
           }
       }
     closeNums shouldBe true
+  }
+
+  it should "deliver frames until file end and then stop" in {
+    import system._
+    val numExpectedFrames = 10
+    val file = fileParams(false).file(fileStationID, fileThreadID)
+    val f = new FileOutputStream(file)
+    f.write(((0 until numExpectedFrames * arraySize) map (_.toByte)).toArray)
+    f.close()
+    try {
+      val generator = testGenerator(
+        fileStationID,
+        fileThreadID,
+        genParams = Some(fileParams(false)))
+      val frames = receiveWhile(2.seconds) {
+        case GeneratorSpec.Packet(bs) => bs
+      }
+      generator ! PoisonPill
+      frames should have length numExpectedFrames
+    } finally {
+      file.delete()
+    }
   }
 }
 

@@ -25,6 +25,8 @@ abstract class ValueSourceBase[V] extends Actor {
 
   val bufferSize: Int
 
+  var endOfStream: Boolean = false
+
   def requestValues(n: Int): Unit
 
   def receiveValues(as: Vector[Any]): Vector[V]
@@ -44,8 +46,11 @@ abstract class ValueSourceBase[V] extends Actor {
     val eventualLength = buffer.length + pendingReceives
     val deficit = bufferSize - eventualLength
     if (deficit > 0) {
-      requestValues(numRequests(deficit))
-      pendingReceives += deficit
+      val nr = numRequests(deficit)
+      requestValues(nr)
+      valueRatio match {
+        case (r, v) => pendingReceives += (nr * v) / r
+      }
     }
   }
 
@@ -59,16 +64,28 @@ abstract class ValueSourceBase[V] extends Actor {
 
   private def sendToPendingGets() {
     pendingGets match {
-      case Vector() =>
-        requestFullBuffer()
       case (actor, numValues) +: ps =>
         if (buffer.length >= numValues) {
           pendingGets = ps
           fulfillRequest(actor, numValues)
           sendToPendingGets()
         } else {
-          requestFullBuffer()
+          if (!endOfStream) {
+            requestFullBuffer()
+          }
+          else {
+            pendingGets = ps
+            if (buffer.isEmpty) {
+              actor ! ValueSource.EndOfStream
+            } else {
+              actor ! ValueSource.Values(buffer)
+              buffer = Vector.empty
+            }
+            sendToPendingGets()
+          }
         }
+      case Vector() =>
+        if (!endOfStream) requestFullBuffer()
     }
   }
 
@@ -85,12 +102,14 @@ abstract class ValueSourceBase[V] extends Actor {
 
   private def addPendingGet(to: ActorRef, numValues: Int) {
     val nv = numValues max 0
-    val nr = numRequests(nv)
-    requestValues(nr)
-    pendingGets = pendingGets :+ ((to, nv))
-    valueRatio match {
-      case (r, v) => pendingReceives += (nr * v) / r
+    if (!endOfStream) {
+      val nr = numRequests(nv)
+      requestValues(nr)
+      valueRatio match {
+        case (r, v) => pendingReceives += (nr * v) / r
+      }
     }
+    pendingGets = pendingGets :+ ((to, nv))
   }
 
   override def preStart() {
@@ -102,10 +121,15 @@ abstract class ValueSourceBase[V] extends Actor {
       addPendingGet(sender, n)
       sendToPendingGets()
     case ValueSource.Values(vs) =>
+      assert(!endOfStream)
       val newVs = receiveValues(vs)
       pendingReceives -= newVs.length
       buffer ++= newVs
       sendToPendingGets()
+    case ValueSource.EndOfStream =>
+      endOfStream = true
+      sendToPendingGets()
+      assert(pendingGets.isEmpty)
   }
 }
 
@@ -124,12 +148,18 @@ class ValueSource[V](sourceProps: Props, val bufferSize: Int)
     as.asInstanceOf[Vector[V]]
 }
 
-private class FileByteGetter(file: File, readBufferSize: Int) extends Actor {
+private class FileByteGetter(
+  file: File,
+  readBufferSize: Int,
+  cycleData: Boolean)
+    extends Actor with ActorLogging {
   import context._
 
   val channel = new FileInputStream(file).getChannel
 
   val buffer = ByteBuffer.allocate(readBufferSize)
+
+  var endOfStream = false
 
   override def postStop() {
     channel.close()
@@ -137,24 +167,31 @@ private class FileByteGetter(file: File, readBufferSize: Int) extends Actor {
 
   def fillBuffer() {
     buffer.clear()
-    while (buffer.position < buffer.limit) {
-      if (channel.size == channel.position) channel.position(0)
-      channel.read(buffer)
+    var eos = false
+    while (!eos && buffer.remaining > 0) {
+      if (channel.size == channel.position && cycleData) channel.position(0)
+      val nBytes = channel.read(buffer)
+      eos = nBytes == -1
     }
+    buffer.limit(buffer.position)
     buffer.position(0)
   }
 
   def get(acc: Vector[Byte], n: Int): Vector[Byte] = {
     if (n == 0) acc
     else {
-      if (buffer.limit == buffer.position) fillBuffer()
-      val take = n min (buffer.limit - buffer.position)
-      val v = Vector(
-        buffer.array.slice(
-          buffer.position,
-          buffer.position + take):_*)
-      buffer.position(buffer.position + take)
-      get(acc ++ v, n - take)
+      if (buffer.remaining == 0) fillBuffer()
+      val take = n min buffer.remaining
+      if (take > 0) {
+        val v = Vector(
+          buffer.array.slice(
+            buffer.position,
+            buffer.position + take):_*)
+        buffer.position(buffer.position + take)
+        get(acc ++ v, n - take)
+      } else {
+        acc
+      }
     }
   }
 
@@ -162,18 +199,29 @@ private class FileByteGetter(file: File, readBufferSize: Int) extends Actor {
 
   def receive: Receive = {
     case ValueSource.Get(n) =>
-      sender ! ValueSource.Values(get(Vector.empty, n))
+      if (!endOfStream) {
+        val vs = get(Vector.empty, n)
+        if (n == 0 || vs.length > 0) {
+          sender ! ValueSource.Values(vs)
+        } else {
+          endOfStream = true
+          sender ! ValueSource.EndOfStream
+        }
+      } else {
+        sender ! ValueSource.EndOfStream
+      }
   }
 }
 
 class FileByteSource(
   val file: File,
   val readBufferSize: Int,
+  val cycleData: Boolean,
   val bufferSize: Int)
     extends ValueSourceBase[Byte] {
 
   val getter = context.actorOf(
-    Props(classOf[FileByteGetter], file, readBufferSize),
+    Props(classOf[FileByteGetter], file, readBufferSize, cycleData),
     "getter")
 
   val valueRatio = (1, 1)
@@ -195,18 +243,37 @@ object ValueSource {
 
   case class Get(n: Int)
   case class Values[V](v: Vector[V])
+  case object EndOfStream
+
+  object EndOfStreamException extends Exception
 
   private class Getter[V](generate: () => V) extends Actor {
     import context._
 
+    var endOfStream = false
+
     def receive: Receive = {
       case ValueSource.Get(n) =>
-        sender ! ValueSource.Values((0 until n).toVector map (_ => generate()))
+        if (!endOfStream) {
+          try {
+            sender ! Values((0 until n).toVector map (_ => generate()))
+          } catch {
+            case EndOfStreamException =>
+              endOfStream = true
+              sender ! ValueSource.EndOfStream
+          }
+        } else {
+          sender ! ValueSource.EndOfStream
+        }
     }
   }
 }
 
 object FileByteSource {
-  def props(file: File, readBufferSize: Int, bufferSize: Int = 1): Props =
-    Props(classOf[FileByteSource], file, readBufferSize, bufferSize)
+  def props(
+    file: File,
+    readBufferSize: Int,
+    cycleData: Boolean,
+    bufferSize: Int = 1): Props =
+    Props(classOf[FileByteSource], file, readBufferSize, cycleData, bufferSize)
 }

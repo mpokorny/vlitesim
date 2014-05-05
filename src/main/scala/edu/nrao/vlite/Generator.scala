@@ -127,10 +127,14 @@ abstract class Generator(
       }
   }
 
+  var endOfStream = false
+
   def running: Receive = getExpectedFrameRate orElse {
     case Generator.GenFrames =>
-      val (sec, count) = Generator.timeFromRefEpoch
-      requestFrames(sec, count)
+      if (!endOfStream) {
+        val (sec, count) = Generator.timeFromRefEpoch
+        requestFrames(sec, count)
+      }
     case ValueSource.Values(vs) =>
       if (vs.length > 0) {
         pendingTimestamps splitAt vs.length match {
@@ -142,6 +146,14 @@ abstract class Generator(
               })
             pendingTimestamps = remTs
         }
+      }
+    case ValueSource.EndOfStream =>
+      if (!endOfStream) {
+        log.info("Reached end of stream")
+        endOfStream = true
+        parent ! Generator.EndOfStream
+        stream.foreach(_.cancel)
+        stream = None
       }
   }
 }
@@ -192,7 +204,9 @@ final class SimdataGenerator(
 
 final case class FileParams(
   val readBufferSize: Int,
-  val fileNamePattern: String) extends GeneratorParams {
+  val fileNamePattern: String,
+  val cycleData: Boolean) extends GeneratorParams {
+
   def file(threadID: Int, stationID: Int): File = {
     new File(
       fileNamePattern.replaceAll("@THREAD@", threadID.toString).
@@ -214,6 +228,7 @@ final class FiledataGenerator(
   implicit object VLITEConfig extends VLITEConfigFileData {
     val file = fileParams.file(threadID, stationID)
     val readBufferSize = fileParams.readBufferSize
+    val cycleData = fileParams.cycleData
     val dataArraySize = arraySize
     lazy val actorRefFactory = gen.context
     val bufferSize = 2
@@ -289,4 +304,5 @@ object Generator {
   case object GenFrames
   case object GetExpectedFrameRate
   case class ExpectedFrameRate(framesPerSec: Int)
+  case object EndOfStream
 }
