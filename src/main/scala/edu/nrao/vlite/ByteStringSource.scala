@@ -17,6 +17,7 @@
 //
 package edu.nrao.vlite
 
+import scala.annotation.tailrec
 import akka.actor._
 import akka.util.{ ByteString, ByteStringBuilder }
 
@@ -51,7 +52,8 @@ class ByteStringSource(
     }
   }
 
-  def collectByteStrings(
+  @tailrec
+  private def collectByteStrings(
     acc: Vector[ByteString],
     optBuilder: Option[ByteStringBuilder],
     bs: Vector[Byte]): (Vector[ByteString], Option[ByteStringBuilder]) = {
@@ -61,6 +63,8 @@ class ByteStringSource(
         val bldr = builder(optBuilder).get
         val (nextAcc, nextBuilder, remBs) =
           (bs splitAt (length - bldr.length)) match {
+            case (Vector(), _) =>
+              (acc, Some(bldr), bs)
             case (bsPrefix, bsSuffix) =>
               bldr ++= bsPrefix
               if (bldr.length == length)
