@@ -32,6 +32,8 @@ class ByteStringSource(
 
   val valueRatio = (length, 1)
 
+  val minRequestSize = 1
+
   def requestValues(n: Int) {
     byteSource ! ValueSource.Get(n)
   }

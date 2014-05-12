@@ -33,13 +33,15 @@ abstract class ValueSourceBase[V] extends Actor {
 
   val valueRatio: (Int, Int) // this actor's request to value ratio
 
+  val minRequestSize: Int
+
   private var buffer: Vector[V] = Vector.empty
 
   private var pendingGets: Vector[(ActorRef, Int)] = Vector.empty
 
   private var pendingReceives: Int = 0
 
-  private def ceil(n: Int, d: Int) =
+  final protected def ceil(n: Int, d: Int) =
     (n + (d - n % d) % d) / d
 
   private def requestFullBuffer() {
@@ -56,9 +58,9 @@ abstract class ValueSourceBase[V] extends Actor {
 
   private def numRequests(numValues: Int) = 
     if (numValues > 0)
-      valueRatio match {
+      (valueRatio match {
         case (r, v) => ceil(numValues, v) * r
-      }
+      }) max minRequestSize
     else
       0
 
@@ -137,6 +139,8 @@ class ValueSource[V](sourceProps: Props, val bufferSize: Int)
     extends ValueSourceBase[V] {
 
   val valueRatio = (1, 1)
+
+  val minRequestSize = 1
 
   val source = context.actorOf(sourceProps, "source")
 
