@@ -17,9 +17,12 @@
 //
 package edu.nrao.vlite
 
+import scala.annotation.tailrec
 import akka.actor._
+import akka.util.ByteString
 import java.io.{ File, FileInputStream }
 import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
 
 abstract class ValueSourceBase[V] extends Actor {
 
@@ -152,90 +155,72 @@ class ValueSource[V](sourceProps: Props, val bufferSize: Int)
     as.asInstanceOf[Vector[V]]
 }
 
-private class FileByteGetter(
-  file: File,
-  readBufferSize: Int,
-  cycleData: Boolean)
-    extends Actor with ActorLogging {
-  import context._
-
-  val channel = new FileInputStream(file).getChannel
-
-  val buffer = ByteBuffer.allocate(readBufferSize)
-
-  var endOfStream = false
-
-  override def postStop() {
-    channel.close()
-  }
-
-  def fillBuffer() {
-    buffer.clear()
-    var eos = false
-    while (!eos && buffer.remaining > 0) {
-      if (channel.size == channel.position && cycleData) channel.position(0)
-      val nBytes = channel.read(buffer)
-      eos = nBytes == -1
-    }
-    buffer.limit(buffer.position)
-    buffer.position(0)
-  }
-
-  def get(acc: Vector[Byte], n: Int): Vector[Byte] = {
-    if (n == 0) acc
-    else {
-      if (buffer.remaining == 0) fillBuffer()
-      val take = n min buffer.remaining
-      if (take > 0) {
-        val v = Vector(
-          buffer.array.slice(
-            buffer.position,
-            buffer.position + take):_*)
-        buffer.position(buffer.position + take)
-        get(acc ++ v, n - take)
-      } else {
-        acc
-      }
-    }
-  }
-
-  fillBuffer()
-
-  def receive: Receive = {
-    case ValueSource.Get(n) =>
-      if (!endOfStream) {
-        val vs = get(Vector.empty, n)
-        if (n == 0 || vs.length > 0) {
-          sender ! ValueSource.Values(vs)
-        } else {
-          endOfStream = true
-          sender ! ValueSource.EndOfStream
-        }
-      } else {
-        sender ! ValueSource.EndOfStream
-      }
-  }
-}
-
-class FileByteSource(
+final class FileByteSource(
   val file: File,
-  val readBufferSize: Int,
+  val length: Int,
   val cycleData: Boolean,
   val bufferSize: Int)
-    extends ValueSourceBase[Byte] {
-
-  val getter = context.actorOf(
-    Props(classOf[FileByteGetter], file, readBufferSize, cycleData),
-    "getter")
+    extends ValueSourceBase[ByteString] with ActorLogging {
 
   val valueRatio = (1, 1)
 
-  def requestValues(n: Int) {
-    getter ! ValueSource.Get(n)
+  val minRequestSize = 1
+
+  val mappedFile = {
+    val channel = new FileInputStream(file).getChannel
+    val result = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size)
+    channel.close()
+    result
   }
 
-  def receiveValues(as: Vector[Any]): Vector[Byte] =
-    as.asInstanceOf[Vector[Byte]]
+  var endOfFile = false
+
+  @tailrec
+  def getValues(n: Int, acc: Vector[ByteString]): Vector[ByteString] = {
+    if (n == 0 || endOfFile) {
+      acc
+    } else if (mappedFile.remaining < length && !cycleData) {
+      endOfFile = true
+      acc
+    } else {
+      val next =
+        if (mappedFile.remaining >= length) {
+          val buf = mappedFile.slice
+          buf.limit(length)
+          mappedFile.position(mappedFile.position + length)
+          ByteString(buf)
+        } else {
+          val nextVs =
+            if (mappedFile.remaining > 0)
+              Some(ByteString(mappedFile.slice))
+            else
+              None
+          val remLength = length - mappedFile.remaining
+          mappedFile.position(0)
+          val buf = mappedFile.slice
+          buf.limit(remLength)
+          val remVs = ByteString(buf)
+          mappedFile.position(remLength)
+          nextVs.map(_ ++ remVs).getOrElse(remVs)
+        }
+      getValues(n - 1, acc :+ next)
+    }
+  }
+
+  def requestValues(n: Int) {
+    if (!endOfFile) {
+      val vs = getValues(n, Vector.empty)
+      if (n == 0 || vs.length > 0)
+        self ! ValueSource.Values(vs)
+      else
+        self ! ValueSource.EndOfStream
+    } else {
+      self ! ValueSource.EndOfStream
+    }
+  }
+
+  def receiveValues(as: Vector[Any]): Vector[ByteString] =
+    as.asInstanceOf[Vector[ByteString]]
 }
 
 object ValueSource {
@@ -276,8 +261,13 @@ object ValueSource {
 object FileByteSource {
   def props(
     file: File,
-    readBufferSize: Int,
+    length: Int,
     cycleData: Boolean,
     bufferSize: Int = 1): Props =
-    Props(classOf[FileByteSource], file, readBufferSize, cycleData, bufferSize)
+    Props(
+      classOf[FileByteSource],
+      file,
+      length,
+      cycleData,
+      bufferSize)
 }
