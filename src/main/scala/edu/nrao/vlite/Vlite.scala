@@ -304,14 +304,13 @@ trait VLITEConfigFileData extends VLITEConfig {
 
   val file: File
 
-  val readBufferSize: Int
-
   val cycleData: Boolean
 
   lazy val bsActor = actorRefFactory.actorOf(
-    ByteStringSource.props(
-      FileByteSource.props(file, readBufferSize, cycleData),
+    FileByteSource.props(
+      file,
       dataArraySize,
+      cycleData,
       bufferSize),
     "bytestrings")
 

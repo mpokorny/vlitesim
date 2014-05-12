@@ -67,8 +67,8 @@ class GeneratorSpec(_system: ActorSystem)
   val simParams = SimParams(888L, Vector(0.1, -0.2, 1.0, -0.2, 0.1), 6.2, 128)
 
   val fileParams = Map(
-    true -> FileParams(2 * arraySize, "/tmp/test_@STATION@_@THREAD@.dat", true),
-    false -> FileParams(2 * arraySize, "/tmp/test_@STATION@_@THREAD@.dat", false)
+    true -> FileParams("/tmp/test_@STATION@_@THREAD@.dat", true),
+    false -> FileParams("/tmp/test_@STATION@_@THREAD@.dat", false)
   )
 
   val fileStationID = 4
@@ -163,7 +163,8 @@ class GeneratorSpec(_system: ActorSystem)
     import system._
     val file = fileParams(true).file(fileStationID, fileThreadID)
     val f = new FileOutputStream(file)
-    f.write(((0 until fileParams(true).readBufferSize) map (_.toByte)).toArray)
+    val numBytes = 2 * arraySize
+    f.write(((0 until numBytes) map (_.toByte)).toArray)
     f.close()
     try {
       val generator = testGenerator(
@@ -190,7 +191,8 @@ class GeneratorSpec(_system: ActorSystem)
     import system._
     val file = fileParams(true).file(fileStationID, fileThreadID)
     val f = new FileOutputStream(file)
-    f.write(((0 until fileParams(true).readBufferSize) map (_.toByte)).toArray)
+    val numBytes = 2 * arraySize
+    f.write(((0 until numBytes) map (_.toByte)).toArray)
     f.close()
     val decimation = 5120
     try {
@@ -210,7 +212,7 @@ class GeneratorSpec(_system: ActorSystem)
       }
       def expectedArray(i: Int) = {
         ((i * arraySize) until ((i + 1) * arraySize)) map { n =>
-          (n % fileParams(true).readBufferSize).toByte
+          (n % numBytes).toByte
         }
       }
       for (i <- 0 until dataFrames.length)

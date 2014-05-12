@@ -203,7 +203,6 @@ final class SimdataGenerator(
 }
 
 final case class FileParams(
-  val readBufferSize: Int,
   val fileNamePattern: String,
   val cycleData: Boolean) extends GeneratorParams {
 
@@ -227,11 +226,12 @@ final class FiledataGenerator(
 
   implicit object VLITEConfig extends VLITEConfigFileData {
     val file = fileParams.file(threadID, stationID)
-    val readBufferSize = fileParams.readBufferSize
     val cycleData = fileParams.cycleData
     val dataArraySize = arraySize
     lazy val actorRefFactory = gen.context
-    val bufferSize = 2
+    private def ceil(n: Int, d: Int) =
+      (n + (d - n % d) % d) / d
+    lazy val bufferSize = 2 * ceil(gen.framesPerSec, (1.second / pace).toInt)
   }
 }
 
