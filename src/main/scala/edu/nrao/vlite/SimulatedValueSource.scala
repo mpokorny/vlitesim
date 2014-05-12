@@ -34,6 +34,8 @@ class SimulatedValueSource(
   var gaussianRVs: Vector[Double] = Vector.empty
 
   val valueRatio = (1, 1)
+
+  val minRequestSize = 1
   
   def requestValues(n: Int) {
     gaussianSource ! ValueSource.Get(n + filter.length - 1 - gaussianRVs.length)
