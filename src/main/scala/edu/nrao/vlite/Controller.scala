@@ -158,6 +158,7 @@ class Controller extends Actor with ActorLogging {
     handleBufferCounts orElse {
       case Emulator.EndOfStream =>
         getBufferCounts.cancel
+        log.info("Reached end of stream")
         stop(self)
     }
   }
